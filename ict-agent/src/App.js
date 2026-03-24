@@ -7,7 +7,7 @@ import{useState,useEffect,useRef,useCallback,useMemo}from"react";
 const WORKER="https://ict-data-proxy.suketu29.workers.dev";
 const IST=5.5*60*60*1000;
 const ENV_AI=process.env.REACT_APP_ANTHROPIC_KEY||"";
-const SYM_SRC={XAUUSD:"fh",XAGUSD:"fh",USOIL:"td",NATGAS:"td"};
+const SYM_SRC={XAUUSD:"fh",XAGUSD:"fh",USOIL:"fh",NATGAS:"fh"};
 const FH_RES={"1m":"1","5m":"5","15m":"15","30m":"30","1H":"60","4H":"240","1D":"D","1W":"W"};
 const TD_INT={"1m":"1min","5m":"5min","15m":"15min","30m":"30min","1H":"1h","2H":"2h","4H":"4h","1D":"1day","1W":"1week"};
 function nowIST(){return new Date(Date.now()+IST);}
@@ -21,7 +21,12 @@ function getT(){const now=new Date(),m=now.getMonth()+1,d=now.getDate();const uk
 const TF_ORDER=["1m","5m","15m","30m","1H","2H","4H","1D","1W"];
 const ALL_TF=TF_ORDER;
 const tfMins=tf=>({"1m":1,"5m":5,"15m":15,"30m":30,"1H":60,"2H":120,"4H":240,"1D":1440,"1W":10080}[tf]||15);
-const SYMS={XAUUSD:{label:"Gold",color:"#92400E",accent:"#B45309",bg:"#FFFBEB",border:"#FDE68A",td:"XAU/USD",fh:"XAU/USD",fallback:3020,vol:0.0018,pip:0.01},XAGUSD:{label:"Silver",color:"#374151",accent:"#4B5563",bg:"#F9FAFB",border:"#D1D5DB",td:"XAG/USD",fh:"XAG/USD",fallback:33.5,vol:0.003,pip:0.001},USOIL:{label:"Crude",color:"#9A3412",accent:"#C2410C",bg:"#FFF7ED",border:"#FED7AA",td:"WTI/USD",fh:"WTI/USD",fallback:71.2,vol:0.003,pip:0.01},NATGAS:{label:"NatGas",color:"#075985",accent:"#0369A1",bg:"#F0F9FF",border:"#BAE6FD",td:"XNG/USD",fh:"XNG/USD",fallback:2.18,vol:0.006,pip:0.001}};
+const SYMS={
+  XAUUSD:{label:"Gold",    color:"#92400E",accent:"#B45309",bg:"#FFFBEB",border:"#FDE68A",td:"XAU/USD", fh:"XAU_USD",fallback:3020,vol:0.0018,pip:0.01},
+  XAGUSD:{label:"Silver",  color:"#374151",accent:"#4B5563",bg:"#F9FAFB",border:"#D1D5DB",td:"XAG/USD", fh:"XAG_USD",fallback:33.5, vol:0.003, pip:0.001},
+  USOIL: {label:"Crude Oil",color:"#9A3412",accent:"#C2410C",bg:"#FFF7ED",border:"#FED7AA",td:"XTI/USD", fh:"USOIL",  fallback:71.2, vol:0.003, pip:0.01},
+  NATGAS:{label:"Nat Gas", color:"#075985",accent:"#0369A1",bg:"#F0F9FF",border:"#BAE6FD",td:"XNG/USD", fh:"NATGAS", fallback:2.18, vol:0.006, pip:0.001},
+};
 const SK={brain:"ict_v12_brain",key:"ict_v12_tdkey",fhkey:"ict_v12_fhkey",aikey:"ict_v12_aikey",cache:"ict_v12_cache",done:"ict_v12_done",user:"ict_v12_user",tlog:"ict_v12_tlog",signals:"ict_v12_signals"};
 const ls={get:k=>{try{const r=localStorage.getItem(k);return r?JSON.parse(r):null;}catch{}return null;},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}},str:k=>{try{return localStorage.getItem(k)||"";}catch{}return"";},setStr:(k,v)=>{try{localStorage.setItem(k,v);}catch{}}};
 // ── API ──────────────────────────────────────────────────────
@@ -393,114 +398,256 @@ function SettingsModal({onClose,onSave,times}){
 }
 // ═══════════════════════════════════════════════════════════════
 //  PROFESSIONAL CHART COMPONENT
-// ═══════════════════════════════════════════════════════════════
-function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS}){
-  const[chartH,setChartH]=useState(420);const[showFVG,setShowFVG]=useState(true);const[showOB,setShowOB]=useState(true);const[showFib,setShowFib]=useState(false);const[showLiq,setShowLiq]=useState(true);const[showStr,setShowStr]=useState(true);const[showMA,setShowMA]=useState(true);const[showAsian,setShowAsian]=useState(true);const[nCandles,setNCandles]=useState(50);const isDrag=useRef(false);const dragY=useRef(0);const dragH0=useRef(0);
+// ═══════════════════════════════════════════════════════════════function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS}){
+  const[chartH,setChartH]=useState(460);
+  const[showFVG,setShowFVG]=useState(true);const[showOB,setShowOB]=useState(true);
+  const[showFib,setShowFib]=useState(false);const[showLiq,setShowLiq]=useState(true);
+  const[showStr,setShowStr]=useState(true);const[showMA,setShowMA]=useState(true);
+  const[showAsian,setShowAsian]=useState(true);const[nCandles,setNCandles]=useState(60);
+  const isDrag=useRef(false);const dragY=useRef(0);const dragH0=useRef(0);
   const recent=useMemo(()=>data?data.slice(-nCandles):[],[data,nCandles]);
-  useEffect(()=>{const onMove=e=>{if(!isDrag.current)return;const dy=e.clientY-dragY.current;setChartH(Math.max(250,dragH0.current+dy));};const onUp=()=>{isDrag.current=false;};document.addEventListener("mousemove",onMove);document.addEventListener("mouseup",onUp);return()=>{document.removeEventListener("mousemove",onMove);document.removeEventListener("mouseup",onUp);};},[]);
-  const h=fullscreen?window.innerHeight-120:chartH;
-  if(!data?.length)return<div style={{height:`${h}px`,display:"flex",alignItems:"center",justifyContent:"center",background:"#FAFAFA",borderRadius:"12px",border:"1px solid #E2E8F0",color:"#94A3B8",flexDirection:"column",gap:"8px"}}><div style={{fontSize:"32px"}}>📊</div><div style={{fontSize:"15px",fontWeight:"500"}}>Loading {tfLabel}...</div></div>;
+  useEffect(()=>{
+    const onMove=e=>{if(!isDrag.current)return;setChartH(Math.max(280,dragH0.current+(e.clientY-dragY.current)));};
+    const onUp=()=>{isDrag.current=false;};
+    document.addEventListener("mousemove",onMove);document.addEventListener("mouseup",onUp);
+    return()=>{document.removeEventListener("mousemove",onMove);document.removeEventListener("mouseup",onUp);};
+  },[]);
+  const effH=fullscreen?window.innerHeight-50:chartH;
+  if(!data?.length)return(
+    <div style={{height:`${effH}px`,display:"flex",alignItems:"center",justifyContent:"center",background:"#0D1117",borderRadius:"8px",border:"1px solid #21262D",color:"#8B949E",flexDirection:"column",gap:"8px"}}>
+      <div style={{fontSize:"32px"}}>📊</div><div style={{fontSize:"14px"}}>Loading {tfLabel}...</div>
+    </div>);
   const maxP=Math.max(...recent.map(c=>c.h)),minP=Math.min(...recent.map(c=>c.l)),range=maxP-minP||1;
-  const W=920,H=h-72,pL=76,pR=70,pT=12,pB=60;const cW=W-pL-pR,cH=H-pT-pB;
-  const cw=Math.max(cW/recent.length-1.2,2.5);const py=v=>pT+cH-((v-minP)/range)*cH;const px=i=>pL+i*(cW/recent.length)+cw/2;
-  const priceGrid=Array.from({length:6},(_,i)=>minP+(range/5)*i);
+  // Full width SVG — no fixed W, use 100% viewBox with dynamic calculation
+  const W=1200,pL=70,pR=72,pT=12,pB=52;
+  const cH=effH-110;// chart body height
+  const cW=W-pL-pR;
+  const cw=Math.max(cW/recent.length-0.8,2);
+  const py=v=>pT+cH-((v-minP)/range)*cH;
+  const px=i=>pL+i*(cW/recent.length)+cw/2;
+  const priceGrid=Array.from({length:7},(_,i)=>minP+(range/6)*i);
+  // Color theme — TradingView dark
+  const BG="#0D1117",GRID="#161B22",TEXT="#8B949E",BULL="#26A69A",BEAR="#EF5350";
   return(
-    <div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",boxShadow:"0 1px 8px rgba(0,0,0,0.06)",overflow:"hidden",position:fullscreen?"fixed":"relative",inset:fullscreen?0:undefined,zIndex:fullscreen?1000:undefined,height:fullscreen?"100vh":undefined}}>
-      {/* Toolbar */}
-      <div style={{padding:"7px 12px",borderBottom:"1px solid #F1F5F9",display:"flex",alignItems:"center",gap:"6px",background:"#FAFAFA",flexWrap:"wrap",minHeight:"44px"}}>
+    <div style={{background:BG,borderRadius:"8px",border:"1px solid #21262D",overflow:"hidden",
+      position:fullscreen?"fixed":"relative",inset:fullscreen?0:undefined,zIndex:fullscreen?1000:undefined,
+      width:"100%",boxSizing:"border-box"}}>
+      {/* Toolbar — TradingView style */}
+      <div style={{padding:"6px 12px",borderBottom:"1px solid #21262D",display:"flex",alignItems:"center",gap:"6px",background:"#161B22",flexWrap:"wrap"}}>
+        {/* TF buttons */}
         <div style={{display:"flex",gap:"2px"}}>
           {(allTFs||["1m","5m","15m","30m","1H","4H","1D"]).map(tf=>(
-            <button key={tf} onClick={()=>onTFChange(tf)} style={{padding:"3px 8px",borderRadius:"4px",border:"none",background:chartTF===tf?"#1D4ED8":"#F1F5F9",color:chartTF===tf?"white":"#64748B",fontSize:"12px",fontWeight:chartTF===tf?"700":"500",cursor:"pointer",fontFamily:"monospace"}}>{tf}</button>
-          ))}
+            <button key={tf} onClick={()=>onTFChange(tf)}
+              style={{padding:"3px 9px",borderRadius:"4px",border:"none",
+                background:chartTF===tf?"#1D4ED8":"transparent",
+                color:chartTF===tf?"white":"#8B949E",
+                fontSize:"12px",fontWeight:chartTF===tf?"700":"400",cursor:"pointer",fontFamily:"monospace"}}>
+              {tf}
+            </button>))}
         </div>
-        <select value={nCandles} onChange={e=>setNCandles(Number(e.target.value))} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",borderRadius:"5px",padding:"3px 7px",fontSize:"12px",cursor:"pointer",outline:"none",color:"#374151"}}>
-          {[20,30,50,80,100,150,200].map(n=><option key={n} value={n}>{n}c</option>)}
+        <div style={{width:"1px",height:"18px",background:"#21262D",margin:"0 4px"}}/>
+        {/* Candle count */}
+        <select value={nCandles} onChange={e=>setNCandles(Number(e.target.value))}
+          style={{background:"#21262D",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 7px",fontSize:"12px",color:"#C9D1D9",cursor:"pointer",outline:"none"}}>
+          {[20,30,50,60,80,100,150,200].map(n=><option key={n} value={n}>{n}</option>)}
         </select>
-        <div style={{width:"1px",height:"20px",background:"#E2E8F0",margin:"0 4px"}}/>
-        {[["FVG","#16A34A",showFVG,setShowFVG,"Fair Value Gaps"],["OB","#3B82F6",showOB,setShowOB,"Order Blocks"],["LIQ","#EF4444",showLiq,setShowLiq,"Liquidity levels (BSL/SSL)"],["STR","#7C3AED",showStr,setShowStr,"Structure (BOS/CHoCH)"],["MA","#F59E0B",showMA,setShowMA,"MA20/MA50"],["FIB","#D97706",showFib,setShowFib,"Fibonacci levels"],["ASIAN","#7C3AED",showAsian,setShowAsian,"Asian range"]].map(([lbl,color,val,setter,tooltip])=>(
-          <button key={lbl} onClick={()=>setter(!val)} title={tooltip} style={{padding:"3px 7px",borderRadius:"4px",border:`1.5px solid ${val?color:"#E2E8F0"}`,background:val?`${color}15`:"white",color:val?color:"#94A3B8",fontSize:"11px",fontWeight:"600",cursor:"pointer"}}>{lbl}</button>
-        ))}
+        <div style={{width:"1px",height:"18px",background:"#21262D",margin:"0 4px"}}/>
+        {/* Layer toggles */}
+        {[["FVG","#26A69A",showFVG,setShowFVG],["OB","#3B82F6",showOB,setShowOB],["LIQ","#EF5350",showLiq,setShowLiq],
+          ["STR","#A78BFA",showStr,setShowStr],["MA","#F59E0B",showMA,setShowMA],
+          ["FIB","#D97706",showFib,setShowFib],["ASIAN","#7C3AED",showAsian,setShowAsian]].map(([lbl,color,val,setter])=>(
+          <button key={lbl} onClick={()=>setter(!val)}
+            style={{padding:"2px 8px",borderRadius:"3px",border:`1px solid ${val?color:"#30363D"}`,
+              background:val?`${color}20`:"transparent",color:val?color:"#484F58",
+              fontSize:"11px",fontWeight:"600",cursor:"pointer"}}>
+            {lbl}
+          </button>))}
+        {/* Signal badges */}
         {analysis&&<div style={{marginLeft:"auto",display:"flex",gap:"8px",alignItems:"center"}}>
-          <span style={{background:analysis.dir==="LONG"?"#DCFCE7":"#FEE2E2",color:analysis.dir==="LONG"?"#16A34A":"#DC2626",padding:"3px 10px",borderRadius:"20px",fontSize:"12px",fontWeight:"700"}}>{analysis.dir==="LONG"?"▲ LONG":"▼ SHORT"} {analysis.conf}%</span>
-          {["entry","sl","tp1","tp2"].map(k=>(
-            <span key={k} style={{color:k==="entry"?"#3B82F6":k==="sl"?"#EF4444":k==="tp1"?"#16A34A":"#059669",fontSize:"11px",fontFamily:"monospace"}}>{k.toUpperCase()}:{analysis[k]}</span>
-          ))}
+          <span style={{background:analysis.dir==="LONG"?"rgba(38,166,154,0.2)":"rgba(239,83,80,0.2)",
+            color:analysis.dir==="LONG"?"#26A69A":"#EF5350",padding:"2px 10px",borderRadius:"3px",fontSize:"12px",fontWeight:"700",border:`1px solid ${analysis.dir==="LONG"?"#26A69A":"#EF5350"}33`}}>
+            {analysis.dir==="LONG"?"▲ LONG":"▼ SHORT"} {analysis.conf}%
+          </span>
+          {[{k:"entry",c:"#3B82F6"},{k:"sl",c:"#EF5350"},{k:"tp1",c:"#26A69A"}].map(x=>(
+            <span key={x.k} style={{color:x.c,fontSize:"11px",fontFamily:"monospace"}}>{x.k.toUpperCase()}:{analysis[x.k]}</span>))}
         </div>}
-        <button onClick={onToggleFS} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",borderRadius:"5px",padding:"3px 8px",fontSize:"12px",cursor:"pointer",color:"#64748B",marginLeft:analysis?undefined:"auto"}}>{fullscreen?"⊠":"⊞"}</button>
+        <button onClick={onToggleFS}
+          style={{background:"transparent",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer",color:"#8B949E",marginLeft:analysis?"0":"auto"}}>
+          {fullscreen?"⊠":"⊞"}
+        </button>
       </div>
-      <div style={{height:`${h-44}px`,overflow:"hidden"}}>
-        <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H+pB}`} style={{display:"block",background:"white"}}>
-          {priceGrid.map((p,i)=><g key={i}><line x1={pL} y1={py(p)} x2={W-pR} y2={py(p)} stroke="#F8FAFC" strokeWidth="1"/><text x={pL-5} y={py(p)+4} textAnchor="end" fill="#94A3B8" fontSize="10" fontFamily="monospace">{p>100?p.toFixed(1):p.toFixed(3)}</text></g>)}
+
+      {/* Chart SVG — stretches full width */}
+      <div style={{width:"100%",height:`${effH-42}px`,overflow:"hidden",background:BG}}>
+        <svg width="100%" height="100%" viewBox={`0 0 ${W} ${cH+pT+pB}`} preserveAspectRatio="none"
+          style={{display:"block"}}>
+          {/* Background */}
+          <rect width={W} height={cH+pT+pB} fill={BG}/>
+          {/* Grid lines */}
+          {priceGrid.map((p,i)=>(
+            <g key={i}>
+              <line x1={pL} y1={py(p)} x2={W-pR} y2={py(p)} stroke={GRID} strokeWidth="1"/>
+              <text x={pL-6} y={py(p)+4} textAnchor="end" fill={TEXT} fontSize="10" fontFamily="'Roboto Mono',monospace">
+                {p>100?p.toFixed(2):p.toFixed(3)}
+              </text>
+            </g>))}
+
           {/* MA lines */}
-          {showMA&&analysis?.htf?.ma20>0&&recent.length>20&&(()=>{const pts=recent.slice(-Math.min(20,recent.length)).map((c,i)=>`${px(recent.length-Math.min(20,recent.length)+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#F59E0B" strokeWidth="1.2" opacity="0.8"/>;})()} 
-          {showMA&&analysis?.htf?.ma50>0&&recent.length>50&&(()=>{const pts=recent.slice(-Math.min(50,recent.length)).map((c,i)=>`${px(recent.length-Math.min(50,recent.length)+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#6366F1" strokeWidth="1.2" opacity="0.8"/>;})()} 
-          {/* FVGs */}
+          {showMA&&analysis?.htf?.ma20>0&&(()=>{const n=Math.min(20,recent.length);const pts=recent.slice(-n).map((c,i)=>`${px(recent.length-n+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#F59E0B" strokeWidth="1.3" opacity="0.8"/>;})()} 
+          {showMA&&analysis?.htf?.ma50>0&&(()=>{const n=Math.min(50,recent.length);const pts=recent.slice(-n).map((c,i)=>`${px(recent.length-n+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#6366F1" strokeWidth="1.3" opacity="0.8"/>;})()} 
+
+          {/* FVGs with CE level */}
           {showFVG&&analysis?.fvgs?.filter(f=>!f.filled).slice(-5).map((f,i)=>(
             <g key={`fvg${i}`}>
-              <rect x={pL} y={py(f.top)} width={cW} height={Math.max(Math.abs(py(f.bot)-py(f.top)),1)} fill={f.type==="bullish"?"rgba(220,252,231,0.5)":"rgba(254,226,226,0.5)"} stroke={f.type==="bullish"?"#86EFAC":"#FCA5A5"} strokeWidth="0.8" strokeDasharray="5,3"/>
-              <line x1={pL} y1={py(f.ce)} x2={W-pR} y2={py(f.ce)} stroke={f.type==="bullish"?"#16A34A":"#DC2626"} strokeWidth="0.8" strokeDasharray="3,3" opacity="0.6"/>
-              <text x={pL+4} y={py(f.mid)+4} fill={f.type==="bullish"?"#16A34A":"#DC2626"} fontSize="9" fontWeight="700">FVG {f.type==="bullish"?"▲":"▼"}</text>
-              <text x={W-pR-2} y={py(f.ce)-2} textAnchor="end" fill={f.type==="bullish"?"#16A34A":"#DC2626"} fontSize="8">CE</text>
+              <rect x={pL} y={py(f.top)} width={cW} height={Math.max(Math.abs(py(f.bot)-py(f.top)),1)}
+                fill={f.type==="bullish"?"rgba(38,166,154,0.12)":"rgba(239,83,80,0.12)"}
+                stroke={f.type==="bullish"?"#26A69A44":"#EF535044"} strokeWidth="1"/>
+              <line x1={pL} y1={py(f.ce)} x2={W-pR} y2={py(f.ce)}
+                stroke={f.type==="bullish"?"#26A69A":"#EF5350"} strokeWidth="0.8" strokeDasharray="3,4" opacity="0.7"/>
+              <rect x={pL+4} y={py(f.top)+2} width={28} height={12} fill={f.type==="bullish"?"#26A69A22":"#EF535022"} rx="2"/>
+              <text x={pL+18} y={py(f.top)+11} textAnchor="middle" fill={f.type==="bullish"?"#26A69A":"#EF5350"} fontSize="9" fontWeight="700">FVG</text>
+              <text x={W-pR+2} y={py(f.ce)-2} fill={f.type==="bullish"?"#26A69A":"#EF5350"} fontSize="8.5">CE</text>
             </g>))}
-          {/* OBs */}
+
+          {/* OBs with 50% mean threshold */}
           {showOB&&analysis?.obs?.slice(-4).map((ob,i)=>(
             <g key={`ob${i}`}>
-              <rect x={pL} y={py(ob.hi)} width={cW} height={Math.max(Math.abs(py(ob.lo)-py(ob.hi)),1)} fill={ob.type==="bullish"?"rgba(219,234,254,0.45)":"rgba(254,226,226,0.45)"} stroke={ob.type==="bullish"?"#93C5FD":"#FCA5A5"} strokeWidth="1" strokeDasharray="4,3"/>
-              <line x1={pL} y1={py(ob.ce)} x2={W-pR} y2={py(ob.ce)} stroke={ob.type==="bullish"?"#3B82F6":"#EF4444"} strokeWidth="0.8" strokeDasharray="3,3" opacity="0.6"/>
-              <text x={W-pR-2} y={py(ob.hi)+10} textAnchor="end" fill={ob.type==="bullish"?"#3B82F6":"#EF4444"} fontSize="9" fontWeight="700">OB {ob.type==="bullish"?"▲":"▼"}</text>
-              <text x={W-pR-2} y={py(ob.ce)-2} textAnchor="end" fill={ob.type==="bullish"?"#3B82F6":"#EF4444"} fontSize="8">50%</text>
+              <rect x={pL} y={py(ob.hi)} width={cW} height={Math.max(Math.abs(py(ob.lo)-py(ob.hi)),1)}
+                fill={ob.type==="bullish"?"rgba(59,130,246,0.1)":"rgba(239,83,80,0.1)"}
+                stroke={ob.type==="bullish"?"#3B82F644":"#EF535044"} strokeWidth="1"/>
+              <line x1={pL} y1={py(ob.ce)} x2={W-pR} y2={py(ob.ce)}
+                stroke={ob.type==="bullish"?"#3B82F6":"#EF5350"} strokeWidth="0.8" strokeDasharray="3,4" opacity="0.6"/>
+              <text x={W-pR+3} y={py(ob.hi)+11} fill={ob.type==="bullish"?"#3B82F6":"#EF5350"} fontSize="9" fontWeight="700">OB {ob.quality||""}</text>
+              <text x={W-pR+3} y={py(ob.ce)-2} fill={ob.type==="bullish"?"#3B82F6":"#EF5350"} fontSize="8">50%</text>
             </g>))}
+
           {/* Fibonacci */}
-          {showFib&&analysis?.pd&&[{v:analysis.pd.fib236,l:"23.6%",c:"#94A3B8"},{v:analysis.pd.fib382,l:"38.2%",c:"#F59E0B"},{v:analysis.pd.eq,l:"50% EQ",c:"#6B7280"},{v:analysis.pd.fib618,l:"61.8%",c:"#3B82F6"},{v:analysis.pd.fib705,l:"70.5%",c:"#7C3AED"},{v:analysis.pd.fib786,l:"78.6%",c:"#7C3AED"}].map((f,i)=>(
-            <g key={`fib${i}`}><line x1={pL} y1={py(f.v)} x2={W-pR} y2={py(f.v)} stroke={f.c} strokeWidth="0.8" strokeDasharray="3,6" opacity="0.65"/><text x={pL+3} y={py(f.v)-2} fill={f.c} fontSize="8.5" fontFamily="monospace">{f.l}</text></g>))}
-          {/* Liquidity */}
+          {showFib&&analysis?.pd&&[
+            {v:analysis.pd.fib236,l:"23.6%",c:"#4B5563"},{v:analysis.pd.fib382,l:"38.2%",c:"#F59E0B"},
+            {v:analysis.pd.eq,    l:"50% EQ",c:"#6B7280"},{v:analysis.pd.fib618,l:"61.8%",c:"#3B82F6"},
+            {v:analysis.pd.fib705,l:"70.5% OTE",c:"#A78BFA"},{v:analysis.pd.fib786,l:"78.6% OTE",c:"#A78BFA"}
+          ].map((f,i)=>(
+            <g key={`fib${i}`}>
+              <line x1={pL} y1={py(f.v)} x2={W-pR} y2={py(f.v)} stroke={f.c} strokeWidth="0.7" strokeDasharray="2,6" opacity="0.6"/>
+              <text x={pL+4} y={py(f.v)-2} fill={f.c} fontSize="8.5" fontFamily="monospace" opacity="0.8">{f.l}</text>
+            </g>))}
+
+          {/* Liquidity levels */}
           {showLiq&&analysis?.liq&&<>
-            <line x1={pL} y1={py(analysis.liq.BSL)} x2={W-pR} y2={py(analysis.liq.BSL)} stroke="#EF4444" strokeWidth="1" strokeDasharray="6,3" opacity="0.7"/>
-            <rect x={W-pR+2} y={py(analysis.liq.BSL)-9} width={28} height={14} fill="#EF4444" rx="3"/>
-            <text x={W-pR+16} y={py(analysis.liq.BSL)+2} textAnchor="middle" fill="white" fontSize="8.5" fontWeight="700">BSL</text>
-            <line x1={pL} y1={py(analysis.liq.SSL)} x2={W-pR} y2={py(analysis.liq.SSL)} stroke="#16A34A" strokeWidth="1" strokeDasharray="6,3" opacity="0.7"/>
-            <rect x={W-pR+2} y={py(analysis.liq.SSL)-9} width={28} height={14} fill="#16A34A" rx="3"/>
-            <text x={W-pR+16} y={py(analysis.liq.SSL)+2} textAnchor="middle" fill="white" fontSize="8.5" fontWeight="700">SSL</text>
+            <line x1={pL} y1={py(analysis.liq.BSL)} x2={W-pR} y2={py(analysis.liq.BSL)} stroke="#EF5350" strokeWidth="1.2" strokeDasharray="6,3" opacity="0.8"/>
+            <rect x={W-pR+2} y={py(analysis.liq.BSL)-9} width={30} height={14} fill="#EF535033" rx="3" stroke="#EF5350" strokeWidth="0.5"/>
+            <text x={W-pR+17} y={py(analysis.liq.BSL)+2} textAnchor="middle" fill="#EF5350" fontSize="9" fontWeight="700">BSL</text>
+            <line x1={pL} y1={py(analysis.liq.SSL)} x2={W-pR} y2={py(analysis.liq.SSL)} stroke="#26A69A" strokeWidth="1.2" strokeDasharray="6,3" opacity="0.8"/>
+            <rect x={W-pR+2} y={py(analysis.liq.SSL)-9} width={30} height={14} fill="#26A69A33" rx="3" stroke="#26A69A" strokeWidth="0.5"/>
+            <text x={W-pR+17} y={py(analysis.liq.SSL)+2} textAnchor="middle" fill="#26A69A" fontSize="9" fontWeight="700">SSL</text>
           </>}
-          {/* Structure */}
-          {showStr&&analysis?.structs?.slice(-6).map((s,i)=>{const ci=s.idx-(recent.length>nCandles?candles?.length-nCandles:0);if(ci<0||ci>=recent.length)return null;const x=px(ci);return(
-            <g key={`str${i}`}>
-              <line x1={x} y1={py(s.price)-10} x2={x} y2={py(s.price)+10} stroke={s.dir==="bullish"?"#16A34A":"#DC2626"} strokeWidth="1" opacity="0.5"/>
-              <rect x={x-18} y={py(s.price)-(s.type==="BOS"?9:11)} width={36} height={14} rx="3" fill={s.type==="BOS"?"#3B82F6":"#F59E0B"} opacity="0.9"/>
-              <text x={x} y={py(s.price)-(s.type==="BOS"?0:2)} textAnchor="middle" fill="white" fontSize="8" fontWeight="700">{s.type}</text>
+
+          {/* Structure BOS/CHoCH labels */}
+          {showStr&&analysis?.structs?.slice(-6).map((s,i)=>{
+            const ci=recent.length-(analysis.structs.length-i);if(ci<0||ci>=recent.length)return null;
+            const x=px(ci);
+            return(<g key={`str${i}`}>
+              <line x1={x} y1={py(s.price)-8} x2={x} y2={py(s.price)+8} stroke={s.dir==="bullish"?"#26A69A":"#EF5350"} strokeWidth="1" opacity="0.5"/>
+              <rect x={x-18} y={py(s.price)-(s.type==="BOS"?9:11)} width={36} height={14} rx="3"
+                fill={s.type==="BOS"?"#1D4ED8CC":"#F59E0BCC"}/>
+              <text x={x} y={py(s.price)-(s.type==="BOS"?0:2)} textAnchor="middle" fill="white" fontSize="8.5" fontWeight="700">{s.type}</text>
             </g>);})}
+
           {/* Asian range */}
           {showAsian&&analysis?.asian?.hi>0&&<>
             <line x1={pL} y1={py(analysis.asian.hi)} x2={W-pR} y2={py(analysis.asian.hi)} stroke="#7C3AED" strokeWidth="1" strokeDasharray="4,4" opacity="0.7"/>
-            <text x={pL+4} y={py(analysis.asian.hi)-2} fill="#7C3AED" fontSize="8.5">Asian Hi {analysis.asian.hi}</text>
+            <text x={pL+4} y={py(analysis.asian.hi)-3} fill="#7C3AED" fontSize="8.5">Asia Hi {analysis.asian.hi}</text>
             <line x1={pL} y1={py(analysis.asian.lo)} x2={W-pR} y2={py(analysis.asian.lo)} stroke="#7C3AED" strokeWidth="1" strokeDasharray="4,4" opacity="0.7"/>
-            <text x={pL+4} y={py(analysis.asian.lo)+12} fill="#7C3AED" fontSize="8.5">Asian Lo {analysis.asian.lo}</text>
+            <text x={pL+4} y={py(analysis.asian.lo)+12} fill="#7C3AED" fontSize="8.5">Asia Lo {analysis.asian.lo}</text>
           </>}
+
           {/* Equilibrium */}
-          {analysis?.pd?.eq>0&&<><line x1={pL} y1={py(analysis.pd.eq)} x2={W-pR} y2={py(analysis.pd.eq)} stroke="#CBD5E1" strokeWidth="0.8" strokeDasharray="6,4"/><text x={W-pR+2} y={py(analysis.pd.eq)+4} fill="#94A3B8" fontSize="8">EQ</text></>}
+          {analysis?.pd?.eq>0&&<>
+            <line x1={pL} y1={py(analysis.pd.eq)} x2={W-pR} y2={py(analysis.pd.eq)} stroke="#374151" strokeWidth="0.8" strokeDasharray="6,4"/>
+            <text x={W-pR+3} y={py(analysis.pd.eq)+4} fill="#4B5563" fontSize="8.5">EQ</text>
+          </>}
+
           {/* Signal lines */}
-          {analysis?.entry&&<><line x1={pL} y1={py(analysis.entry)} x2={W-pR} y2={py(analysis.entry)} stroke="#3B82F6" strokeWidth="2" strokeDasharray="7,4"/><rect x={W-pR+2} y={py(analysis.entry)-9} width={62} height={15} fill="#3B82F6" rx="3"/><text x={W-pR+33} y={py(analysis.entry)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">ENTRY {analysis.entry}</text></>}
-          {analysis?.sl&&<><line x1={pL} y1={py(analysis.sl)} x2={W-pR} y2={py(analysis.sl)} stroke="#EF4444" strokeWidth="1.8" strokeDasharray="5,3"/><rect x={W-pR+2} y={py(analysis.sl)-9} width={54} height={15} fill="#EF4444" rx="3"/><text x={W-pR+29} y={py(analysis.sl)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">SL {analysis.sl}</text></>}
-          {analysis?.tp1&&<><line x1={pL} y1={py(analysis.tp1)} x2={W-pR} y2={py(analysis.tp1)} stroke="#16A34A" strokeWidth="1.8" strokeDasharray="5,3"/><rect x={W-pR+2} y={py(analysis.tp1)-9} width={54} height={15} fill="#16A34A" rx="3"/><text x={W-pR+29} y={py(analysis.tp1)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP1 {analysis.tp1}</text></>}
-          {analysis?.tp2&&<><line x1={pL} y1={py(analysis.tp2)} x2={W-pR} y2={py(analysis.tp2)} stroke="#059669" strokeWidth="1.5" strokeDasharray="4,4"/><rect x={W-pR+2} y={py(analysis.tp2)-9} width={54} height={15} fill="#059669" rx="3"/><text x={W-pR+29} y={py(analysis.tp2)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP2 {analysis.tp2}</text></>}
+          {analysis?.entry&&<>
+            <line x1={pL} y1={py(analysis.entry)} x2={W-pR} y2={py(analysis.entry)} stroke="#3B82F6" strokeWidth="1.5" strokeDasharray="7,4"/>
+            <rect x={W-pR+2} y={py(analysis.entry)-9} width={66} height={15} fill="#1D4ED8" rx="3"/>
+            <text x={W-pR+35} y={py(analysis.entry)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">ENTRY {analysis.entry}</text>
+          </>}
+          {analysis?.sl&&<>
+            <line x1={pL} y1={py(analysis.sl)} x2={W-pR} y2={py(analysis.sl)} stroke="#EF5350" strokeWidth="1.5" strokeDasharray="5,3"/>
+            <rect x={W-pR+2} y={py(analysis.sl)-9} width={56} height={15} fill="#B91C1C" rx="3"/>
+            <text x={W-pR+30} y={py(analysis.sl)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">SL {analysis.sl}</text>
+          </>}
+          {analysis?.tp1&&<>
+            <line x1={pL} y1={py(analysis.tp1)} x2={W-pR} y2={py(analysis.tp1)} stroke="#26A69A" strokeWidth="1.5" strokeDasharray="5,3"/>
+            <rect x={W-pR+2} y={py(analysis.tp1)-9} width={56} height={15} fill="#0F766E" rx="3"/>
+            <text x={W-pR+30} y={py(analysis.tp1)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP1 {analysis.tp1}</text>
+          </>}
+          {analysis?.tp2&&<>
+            <line x1={pL} y1={py(analysis.tp2)} x2={W-pR} y2={py(analysis.tp2)} stroke="#059669" strokeWidth="1.2" strokeDasharray="4,5"/>
+            <rect x={W-pR+2} y={py(analysis.tp2)-9} width={56} height={15} fill="#065F46" rx="3"/>
+            <text x={W-pR+30} y={py(analysis.tp2)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP2 {analysis.tp2}</text>
+          </>}
+
           {/* Candles */}
-          {recent.map((c,i)=>{const x=px(i),bull=c.c>=c.o;return(<g key={i}><line x1={x} y1={py(c.h)} x2={x} y2={py(c.l)} stroke={bull?"#16A34A":"#DC2626"} strokeWidth="1.2" opacity="0.8"/><rect x={x-cw/2} y={Math.min(py(c.o),py(c.c))} width={Math.max(cw-1,2)} height={Math.max(Math.abs(py(c.o)-py(c.c)),1.5)} fill={bull?"#16A34A":"#DC2626"} opacity="0.9"/></g>);})}
-          {/* Timestamps */}
-          {recent.map((c,i)=>{const x=px(i),d=new Date(c.t+IST);const hm=`${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;const dm=`${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}`;const prev=i>0?new Date(recent[i-1].t+IST):null;const dayChange=!prev||prev.getUTCDate()!==d.getUTCDate();return(<g key={`ts${i}`}><line x1={x} y1={pT+cH} x2={x} y2={pT+cH+4} stroke="#E2E8F0" strokeWidth="1"/><text x={x} y={pT+cH+14} textAnchor="middle" fill="#64748B" fontSize="9" fontFamily="monospace" fontWeight={dayChange?"700":"400"}>{hm}</text>{dayChange&&<text x={x} y={pT+cH+26} textAnchor="middle" fill="#94A3B8" fontSize="8" fontFamily="monospace">{dm}</text>}</g>);})}
+          {recent.map((c,i)=>{
+            const x=px(i),bull=c.c>=c.o;
+            const col=bull?BULL:BEAR;
+            const bodyH=Math.max(Math.abs(py(c.o)-py(c.c)),1.5);
+            return(<g key={i}>
+              <line x1={x} y1={py(c.h)} x2={x} y2={py(c.l)} stroke={col} strokeWidth="1.2" opacity="0.9"/>
+              <rect x={x-cw/2} y={Math.min(py(c.o),py(c.c))} width={Math.max(cw-0.5,2)} height={bodyH} fill={col} opacity="0.95"/>
+            </g>);})}
+
+          {/* Timestamps — readable, every candle, rotated 45° */}
+          {recent.map((c,i)=>{
+            const x=px(i),d=new Date(c.t+IST);
+            const hm=`${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+            const dm=`${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}`;
+            const prev=i>0?new Date(recent[i-1].t+IST):null;
+            const dayChange=!prev||prev.getUTCDate()!==d.getUTCDate();
+            // Show label every 5 candles to avoid crowding, always on day change
+            const showLabel = dayChange || i%5===0;
+            if(!showLabel)return(<line key={`t${i}`} x1={x} y1={pT+cH} x2={x} y2={pT+cH+3} stroke="#21262D" strokeWidth="1"/>);
+            return(<g key={`t${i}`} transform={`translate(${x},${pT+cH+4})`}>
+              <line x1={0} y1={0} x2={0} y2={4} stroke="#30363D" strokeWidth="1"/>
+              <text transform="rotate(-40)" x={-2} y={3} textAnchor="end" fill={dayChange?"#C9D1D9":"#6E7681"} fontSize={dayChange?"10":"9"} fontFamily="'Roboto Mono',monospace" fontWeight={dayChange?"700":"400"}>
+                {dayChange?`${dm} ${hm}`:hm}
+              </text>
+            </g>);})}
+
           {/* Axes */}
-          <line x1={pL} y1={pT+cH} x2={W-pR} y2={pT+cH} stroke="#E2E8F0" strokeWidth="1.5"/>
-          <line x1={pL} y1={pT} x2={pL} y2={pT+cH} stroke="#E2E8F0" strokeWidth="1.5"/>
+          <line x1={pL} y1={pT+cH} x2={W-pR} y2={pT+cH} stroke="#21262D" strokeWidth="1.5"/>
+          <line x1={pL} y1={pT} x2={pL} y2={pT+cH} stroke="#21262D" strokeWidth="1.5"/>
+
           {/* Legend */}
-          {[{c:"#F59E0B",l:"MA20"},{c:"#6366F1",l:"MA50"},{c:"#16A34A",l:"Bull FVG"},{c:"#3B82F6",l:"Bull OB"},{c:"#EF4444",l:"BSL"},{c:"#16A34A",l:"SSL"},{c:"#7C3AED",l:"Asian"}].map((item,i)=>(
-            <g key={i} transform={`translate(${pL+i*66},${pT+cH+40})`}><rect x={0} y={-7} width={8} height={8} fill={item.c} rx="1"/><text x={11} y={0} fill="#94A3B8" fontSize="9">{item.l}</text></g>
-          ))}
+          {[{c:"#F59E0B",l:"MA20"},{c:"#6366F1",l:"MA50"},{c:"#26A69A",l:"FVG↑"},{c:"#3B82F6",l:"OB↑"},{c:"#EF5350",l:"BSL"},{c:"#26A69A",l:"SSL"},{c:"#7C3AED",l:"Asian"}].map((item,i)=>(
+            <g key={i} transform={`translate(${pL+i*70},${pT+cH+38})`}>
+              <rect x={0} y={-7} width={8} height={8} fill={item.c} rx="1.5" opacity="0.85"/>
+              <text x={12} y={0} fill="#484F58" fontSize="9">{item.l}</text>
+            </g>))}
         </svg>
       </div>
-      {!fullscreen&&<div onMouseDown={e=>{isDrag.current=true;dragY.current=e.clientY;dragH0.current=chartH;}} style={{height:"5px",background:"#F1F5F9",cursor:"ns-resize",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none"}} title="Drag to resize"><div style={{width:"32px",height:"3px",background:"#CBD5E1",borderRadius:"2px"}}/></div>}
+
+      {/* Resize handle */}
+      {!fullscreen&&(
+        <div onMouseDown={e=>{isDrag.current=true;dragY.current=e.clientY;dragH0.current=chartH;}}
+          style={{height:"5px",background:"#161B22",cursor:"ns-resize",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none"}}>
+          <div style={{width:"36px",height:"2px",background:"#30363D",borderRadius:"1px"}}/>
+        </div>)}
     </div>);}
-// ═══════════════════════════════════════════════════════════════
-//  MAIN APP
-// ═══════════════════════════════════════════════════════════════
+
+
+const ICT_STRATEGIES=[
+  {id:"silver_bullet",name:"Silver Bullet",icon:"🥈",desc:"FVG CE entry during Silver Bullet window. Mark BSL/SSL → sweep → MSS on 1m → FVG CE entry.",color:"#7C3AED",thresholds:{slMult:0.8,tp1Mult:1.2,tp2Mult:2.0},rules:["bullFVG","bearFVG","chochBull","chochBear","liqSweepSSL","liqSweepBSL"],minConf:55},
+  {id:"ob_retest",name:"OB Mean Threshold",icon:"🏦",desc:"Order Block mitigation at 50% CE level during Killzone. Institutional footprint entry.",color:"#2563EB",thresholds:{slMult:1.2,tp1Mult:2.0,tp2Mult:3.5},rules:["bullOB","bearOB","liqSweepBSL","liqSweepSSL","bosBull","bosBear"],minConf:60},
+  {id:"ote_sovereign",name:"Sovereign OTE",icon:"👑",desc:"OTE 62–79% retracement + FVG — The Sovereign Trader highest probability setup.",color:"#D97706",thresholds:{slMult:1.5,tp1Mult:2.5,tp2Mult:4.0},rules:["ote","premDisc","bullOB","bearOB","bullFVG","bearFVG"],minConf:65},
+  {id:"london_sweep",name:"London Liq Sweep",icon:"🇬🇧",desc:"BSL/SSL sweep at London open + CHoCH. Judas swing reversal — fade the false move.",color:"#2563EB",thresholds:{slMult:1.0,tp1Mult:2.0,tp2Mult:3.0},rules:["liqSweepBSL","liqSweepSSL","chochBull","chochBear","judas"],minConf:58},
+  {id:"ny_open",name:"NY Open Reversal",icon:"🗽",desc:"Judas swing at NY open + BOS + FVG. AMD Manipulation → Distribution. Midnight open bias.",color:"#D97706",thresholds:{slMult:1.2,tp1Mult:2.0,tp2Mult:3.5},rules:["judas","bosBull","bosBear","bullFVG","bearFVG","midnightBias"],minConf:58},
+  {id:"scalp_fvg",name:"Scalp FVG CE",icon:"⚡",desc:"FVG Consequent Encroachment scalp. 200–500 pip targets. Tight SL beyond FVG boundary.",color:"#16A34A",thresholds:{slMult:0.5,tp1Mult:0.8,tp2Mult:1.5},rules:["bullFVG","bearFVG","displacement","chochBull","chochBear"],minConf:50},
+  {id:"unicorn",name:"Unicorn Reversal",icon:"🦄",desc:"SSL/BSL sweep + CHoCH + OB — rarest highest-probability reversal. All three required.",color:"#DC2626",thresholds:{slMult:1.8,tp1Mult:3.0,tp2Mult:5.0},rules:["liqSweepSSL","liqSweepBSL","chochBull","chochBear","bullOB","bearOB","ote"],minConf:70},
+];
+
 export default function App(){
   const[loggedIn,setLoggedIn]=useState(()=>!!ls.get(SK.user));
   const[userEmail,setUserEmail]=useState(()=>ls.get(SK.user)?.email||"");
@@ -525,6 +672,11 @@ export default function App(){
   const[newTrade,setNewTrade]=useState({date:"",sym:"XAUUSD",dir:"LONG",entry:"",sl:"",tp1:"",tp2:"",result:"",pnl:"",notes:""});
   const[showAddTrade,setShowAddTrade]=useState(false);
   const[autobt,setAutobt]=useState(false);const autoRef=useRef(null);
+  // ── TRADE SIMULATOR STATE ─────────────────────────────────
+  const[simTrades,setSimTrades]=useState(()=>ls.get('ict_v12_simtrades')||[]);
+  const[activeSim,setActiveSim]=useState(null); // currently tracking trade
+  const saveSimTrades=useCallback((trades)=>{setSimTrades(trades);ls.set('ict_v12_simtrades',trades);},[]);
+  
   const[chat,setChat]=useState([{role:"assistant",content:`🥇 ICT Sovereign Trader\n\nKnowledge Base: "The Sovereign Trader" — Liquidity, OBs, FVGs, AMD, OTE\n\nLondon: ${times.london.s}–${times.london.e} IST · NY: ${times.ny.s}–${times.ny.e} IST\n${(tdKey||fhKey)?"Loading real market data...":"Add API keys in Settings to get live prices."}`}]);
   const[chatInput,setChatInput]=useState("");const[chatLoading,setChatLoading]=useState(false);
   const istNow=useClock();const chatRef=useRef(null);
@@ -590,7 +742,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
   if(!loggedIn)return <LoginPage onLogin={e=>{setLoggedIn(true);setUserEmail(e);}}/>;
   const S=SYMS[sym];
   const badge=st=>{if(st==="live")return{bg:"#DCFCE7",c:"#16A34A",t:"● LIVE"};if(st==="loading")return{bg:"#FEF9C3",c:"#D97706",t:"⟳"};if(st==="error")return{bg:"#FEE2E2",c:"#DC2626",t:"⚠"};return{bg:"#F1F5F9",c:"#64748B",t:"◌ SIM"};};
-  const TABS=["signal","strategies","sessions","position","weights","backtest","tradelog","learning"];
+  const TABS=["signal","strategies","sessions","position","weights","backtest","tradelog","simulator","learning"];
   return(
     <div style={{background:"#F8FAFC",minHeight:"100vh",fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",color:"#1E293B"}}>
       {showSettings&&<SettingsModal onClose={()=>setShowSettings(false)} onSave={(td,fh,ai)=>{setTdKey(td);setFhKey(fh);setAiKey(ai);}} times={times}/>}
@@ -671,7 +823,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
         <div style={{background:"white",borderRadius:"10px",padding:"4px",border:"1px solid #E2E8F0",display:"flex",gap:"2px",flexWrap:"wrap"}}>
           {TABS.map(t=>(
             <button key={t} onClick={()=>setTab(t)} style={{flex:1,minWidth:"80px",padding:"8px 4px",borderRadius:"7px",border:"none",background:tab===t?"#EFF6FF":"transparent",color:tab===t?"#1D4ED8":"#64748B",fontSize:"12px",fontWeight:tab===t?"700":"500",cursor:"pointer"}}>
-              {t==="signal"?"📡 Signal":t==="strategies"?"🎯 Strategies":t==="sessions"?"🕐 Sessions":t==="position"?"💰 Position":t==="weights"?"⚖️ Weights":t==="backtest"?"📊 Backtest":t==="tradelog"?"📓 Trade Log":"🧠 Learn"}
+              {t==="signal"?"📡 Signal":t==="strategies"?"🎯 Strategies":t==="sessions"?"🕐 Sessions":t==="position"?"💰 Position":t==="weights"?"⚖️ Weights":t==="backtest"?"📊 Backtest":t==="tradelog"?"📓 Trade Log":t==="simulator"?"🎮 Simulator":"🧠 Learn"}
             </button>))}
         </div>
 
@@ -723,7 +875,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
               <div style={{fontSize:"13px",color:"#374151"}}>Each strategy targets specific ICT setups. Click to generate that specific signal. The agent adjusts SL/TP multipliers and minimum confluence rules per strategy.</div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"10px"}}>
-              {ICT_STRATEGIES.map(strat=>(
+              {(ICT_STRATEGIES||[]).map(strat=>(
                 <div key={strat.id} style={{background:"white",borderRadius:"12px",padding:"16px",border:`2px solid ${selStrategy===strat.id?strat.color:"#E2E8F0"}`,cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setSelStrategy(selStrategy===strat.id?null:strat.id)}>
                   <div style={{display:"flex",justify:"space-between",alignItems:"flex-start",marginBottom:"8px"}}>
                     <div style={{fontSize:"24px"}}>{strat.icon}</div>
@@ -816,7 +968,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
               <div style={{fontWeight:"700",fontSize:"16px",marginBottom:"14px"}}>💰 Position Size Calculator</div>
               <div style={{display:"grid",gap:"12px"}}>
                 <div>
-                  <label style={{fontSize:"12px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"5px"}}>TRADING CAPITAL (₹ / $)</label>
+                  <label style={{fontSize:"12px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"5px"}}>TRADING CAPITAL (₹ INR)</label>
                   <input type="number" value={capital} onChange={e=>setCapital(Number(e.target.value))} style={{width:"100%",background:"#F8FAFC",border:"2px solid #E2E8F0",borderRadius:"8px",padding:"10px 14px",fontSize:"16px",fontWeight:"700",fontFamily:"monospace",outline:"none",color:"#1E293B",boxSizing:"border-box"}} onFocus={e=>e.target.style.borderColor="#1D4ED8"} onBlur={e=>e.target.style.borderColor="#E2E8F0"}/>
                 </div>
                 <div>
@@ -831,7 +983,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
               {analysis&&posCalc?(
                 <div style={{marginTop:"14px",display:"grid",gap:"8px"}}>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}}>
-                    {[{l:"Risk Amount",v:`₹${posCalc.riskAmt.toLocaleString()}`,c:"#EF4444",bg:"#FEF2F2",tip:"Maximum you can lose on this trade"},{l:"Lot Size",v:posCalc.lotSize,c:"#1D4ED8",bg:"#EFF6FF",tip:"Recommended position size"},{l:"SL Distance",v:`${posCalc.slPips} pips`,c:"#EF4444",bg:"#FEF2F2",tip:"Distance to stop loss"},{l:"Pip Value",v:`₹${posCalc.riskAmt/posCalc.slPips>0?(posCalc.riskAmt/posCalc.slPips).toFixed(2):0}`,c:"#D97706",bg:"#FFFBEB",tip:"Value per pip movement"}].map(x=>(
+                    {[{l:"Risk Amount",v:`₹{posCalc.riskAmt.toLocaleString()}`,c:"#EF4444",bg:"#FEF2F2",tip:"Maximum you can lose on this trade"},{l:"Lot Size",v:posCalc.lotSize,c:"#1D4ED8",bg:"#EFF6FF",tip:"Recommended position size"},{l:"SL Distance",v:`${posCalc.slPips} pips`,c:"#EF4444",bg:"#FEF2F2",tip:"Distance to stop loss"},{l:"Pip Value",v:`₹${posCalc.riskAmt/posCalc.slPips>0?(posCalc.riskAmt/posCalc.slPips).toFixed(2):0}`,c:"#D97706",bg:"#FFFBEB",tip:"Value per pip movement"}].map(x=>(
                       <div key={x.l} title={x.tip} style={{background:x.bg,borderRadius:"8px",padding:"10px",textAlign:"center",cursor:"help"}}><div style={{color:"#94A3B8",fontSize:"11px",fontWeight:"600",marginBottom:"4px"}}>{x.l}</div><div style={{color:x.c,fontWeight:"800",fontSize:"16px",fontFamily:"monospace"}}>{x.v}</div></div>))}
                   </div>
                   <div style={{padding:"12px",background:"#F0FDF4",borderRadius:"8px",border:"1px solid #BBF7D0"}}>
@@ -914,123 +1066,144 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
         {/* ── BACKTEST TAB ── */}
         {tab==="backtest"&&btResult&&(
           <div style={{display:"grid",gap:"12px"}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:"10px"}}>
-              {[{l:"WIN RATE",v:`${btResult.winRate}%`,c:btResult.winRate>=65?"#16A34A":btResult.winRate>=50?"#D97706":"#DC2626",bg:btResult.winRate>=65?"#F0FDF4":btResult.winRate>=50?"#FFFBEB":"#FEF2F2",tip:"Percentage of winning trades"},{l:"TRADES",v:btResult.total,c:"#1D4ED8",bg:"#EFF6FF",tip:"Total trades in backtest"},{l:"PROFIT FACTOR",v:btResult.profitFactor,c:btResult.profitFactor>=1.5?"#16A34A":"#DC2626",bg:btResult.profitFactor>=1.5?"#F0FDF4":"#FEF2F2",tip:"Gross profit / Gross loss"},{l:"AVG R:R",v:btResult.avgRR,c:"#7C3AED",bg:"#F5F3FF",tip:"Average risk-reward ratio"},{l:"AVG SL PIPS",v:btResult.avgSLPips,c:"#EF4444",bg:"#FEF2F2",tip:"Average stop loss in pips"},{l:"STRATEGY",v:selStrategy?ICT_STRATEGIES.find(s=>s.id===selStrategy)?.icon+" "+ICT_STRATEGIES.find(s=>s.id===selStrategy)?.name.slice(0,8):"All",c:"#374151",bg:"#F8FAFC",tip:"Strategy filter used"}].map(x=>(
-                <div key={x.l} title={x.tip} style={{background:x.bg,borderRadius:"10px",padding:"12px",textAlign:"center",cursor:"help"}}><div style={{color:"#94A3B8",fontSize:"10px",fontWeight:"600",letterSpacing:"0.5px",marginBottom:"6px"}}>{x.l}</div><div style={{color:x.c,fontWeight:"800",fontSize:"20px",fontFamily:"monospace"}}>{x.v}</div></div>))}
+            {/* Summary cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:"8px"}}>
+              {[
+                {l:"WIN RATE",v:`${btResult.winRate}%`,c:btResult.winRate>=65?"#16A34A":btResult.winRate>=50?"#D97706":"#DC2626",bg:btResult.winRate>=65?"#F0FDF4":btResult.winRate>=50?"#FFFBEB":"#FEF2F2",tip:"Percentage of winning trades"},
+                {l:"TRADES",v:btResult.total,c:"#1D4ED8",bg:"#EFF6FF",tip:"Total completed trades"},
+                {l:"PROFIT FACTOR",v:btResult.profitFactor,c:btResult.profitFactor>=1.5?"#16A34A":"#DC2626",bg:btResult.profitFactor>=1.5?"#F0FDF4":"#FEF2F2",tip:"Gross profit divided by gross loss"},
+                {l:"AVG R:R",v:btResult.avgRR,c:"#7C3AED",bg:"#F5F3FF",tip:"Average risk to reward ratio"},
+                {l:"AVG SL PIPS",v:btResult.avgSLPips,c:"#EF4444",bg:"#FEF2F2",tip:"Average stop loss distance in pips"},
+                {l:"MODE",v:btConfig.mode.toUpperCase(),c:"#374151",bg:"#F8FAFC",tip:"Backtest mode used"},
+              ].map(x=>(
+                <div key={x.l} title={x.tip} style={{background:x.bg,borderRadius:"8px",padding:"10px",textAlign:"center",cursor:"help",border:`1px solid ${x.c}22`}}>
+                  <div style={{color:"#94A3B8",fontSize:"10px",fontWeight:"600",letterSpacing:"0.5px",marginBottom:"5px"}}>{x.l}</div>
+                  <div style={{color:x.c,fontWeight:"800",fontSize:"18px",fontFamily:"monospace"}}>{x.v}</div>
+                </div>))}
             </div>
-            <div style={{background:"white",borderRadius:"12px",padding:"14px",border:"1px solid #E2E8F0",maxHeight:"400px",overflowY:"auto"}}>
-              <div style={{fontWeight:"700",fontSize:"14px",marginBottom:"10px"}}>Trade Log — {btResult.total} trades · {btConfig.mode} mode · {selTFs.entry} entry / {selTFs.execution} execution</div>
-              <div style={{display:"grid",gridTemplateColumns:"70px 70px 90px 60px 60px 60px 80px 1fr",gap:"6px",padding:"5px 8px",background:"#F8FAFC",borderRadius:"6px",fontSize:"11px",fontWeight:"700",color:"#94A3B8",marginBottom:"4px"}}>
-                <span>RESULT</span><span>DIR</span><span>ENTRY</span><span>R:R</span><span>SL pips</span><span>TP pips</span><span>SESSION</span><span>CONFLUENCES</span>
-              </div>
-              {btResult.trades.slice().reverse().map((t,i)=>(
-                <div key={i} style={{display:"grid",gridTemplateColumns:"70px 70px 90px 60px 60px 60px 80px 1fr",gap:"6px",padding:"7px 8px",background:i%2===0?"#F8FAFC":"white",borderRadius:"5px",fontSize:"12px",alignItems:"center",marginBottom:"2px"}}>
-                  <span style={{color:t.outcome==="WIN"?"#16A34A":"#DC2626",fontWeight:"700"}}>{t.outcome==="WIN"?"✅":"❌"} {t.outcome}</span>
-                  <span style={{color:t.dir==="LONG"?"#16A34A":"#DC2626",fontWeight:"600"}}>{t.dir==="LONG"?"▲":"▼"} {t.dir}</span>
-                  <span style={{color:"#1D4ED8",fontFamily:"monospace",fontWeight:"600"}}>{t.entry}</span>
-                  <span style={{color:"#7C3AED",fontWeight:"700"}}>{t.rr}</span>
-                  <span style={{color:"#EF4444",fontFamily:"monospace"}}>{t.slPips}</span>
-                  <span style={{color:"#16A34A",fontFamily:"monospace"}}>{t.tp1Pips}</span>
-                  <span style={{color:"#94A3B8",fontSize:"11px"}}>{t.kzId}</span>
-                  <span style={{color:"#64748B",fontSize:"11px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.reasons?.slice(0,2).map(r=>r.label).join(", ")}</span>
-                </div>))}</div>
-          </div>)}
-        {tab==="backtest"&&!btResult&&<div style={{background:"white",borderRadius:"12px",padding:"50px 20px",textAlign:"center",border:"1px solid #E2E8F0"}}><div style={{fontSize:"48px",marginBottom:"12px"}}>📊</div><div style={{fontSize:"17px",fontWeight:"700",marginBottom:"8px"}}>No Backtest Yet</div><div style={{fontSize:"14px",color:"#64748B"}}>Select a strategy in <strong style={{color:"#1D4ED8"}}>🎯 Strategies</strong> then click <strong style={{color:"#7C3AED"}}>🧠 BT + Learn</strong></div></div>}
 
-        {/* ── TRADE LOG TAB ── */}
+            {/* TABLE — proper format with entry + execution TF */}
+            <div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",overflow:"hidden"}}>
+              <div style={{padding:"10px 14px",borderBottom:"1px solid #F1F5F9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#FAFAFA"}}>
+                <span style={{fontWeight:"700",fontSize:"14px"}}>Trade Log — {btResult.total} trades</span>
+                <span style={{fontSize:"12px",color:"#94A3B8"}}>Entry TF: <strong style={{color:"#D97706"}}>{selTFs.entry}</strong> · Execution TF: <strong style={{color:"#16A34A"}}>{selTFs.execution}</strong> · Mode: {btConfig.mode}</span>
+              </div>
+              <div style={{overflowX:"auto",maxHeight:"380px",overflowY:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
+                  <thead style={{position:"sticky",top:0,zIndex:1}}>
+                    <tr style={{background:"#F8FAFC"}}>
+                      {["#","RESULT","DIRECTION","ENTRY PRICE","STOP LOSS","TP1","R:R","SL PIPS","TP PIPS","SESSION","ENTRY TF","EXEC TF","CONFLUENCES"].map(h=>(
+                        <th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:"11px",fontWeight:"700",color:"#64748B",letterSpacing:"0.3px",borderBottom:"2px solid #E2E8F0",whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {btResult.trades.slice().reverse().map((t,i)=>(
+                      <tr key={i} style={{borderBottom:"1px solid #F1F5F9",background:i%2===0?"white":"#FAFAFA",transition:"background 0.1s"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#EFF6FF"}
+                        onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"white":"#FAFAFA"}>
+                        <td style={{padding:"7px 10px",color:"#94A3B8",fontSize:"11px"}}>{btResult.total-i}</td>
+                        <td style={{padding:"7px 10px"}}>
+                          <span style={{background:t.outcome==="WIN"?"#DCFCE7":"#FEE2E2",color:t.outcome==="WIN"?"#16A34A":"#DC2626",padding:"2px 8px",borderRadius:"20px",fontSize:"11px",fontWeight:"700"}}>
+                            {t.outcome==="WIN"?"✅ WIN":"❌ LOSS"}
+                          </span>
+                        </td>
+                        <td style={{padding:"7px 10px"}}>
+                          <span style={{color:t.dir==="LONG"?"#16A34A":"#DC2626",fontWeight:"700",fontSize:"12px"}}>{t.dir==="LONG"?"▲ LONG":"▼ SHORT"}</span>
+                        </td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",fontWeight:"600",color:"#1D4ED8"}}>{t.entry}</td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",color:"#EF4444"}}>{t.sl}</td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",color:"#16A34A"}}>{t.tp1}</td>
+                        <td style={{padding:"7px 10px",fontWeight:"700",color:"#7C3AED"}}>{t.rr}</td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",color:"#EF4444"}}>{t.slPips}</td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",color:"#16A34A"}}>{t.tp1Pips}</td>
+                        <td style={{padding:"7px 10px",color:"#64748B",fontSize:"11px"}}>{t.kzId||"—"}</td>
+                        <td style={{padding:"7px 10px"}}>
+                          <span style={{background:"#FFFBEB",color:"#D97706",padding:"1px 6px",borderRadius:"4px",fontSize:"11px",fontWeight:"600",fontFamily:"monospace"}}>{selTFs.entry}</span>
+                        </td>
+                        <td style={{padding:"7px 10px"}}>
+                          <span style={{background:"#F0FDF4",color:"#16A34A",padding:"1px 6px",borderRadius:"4px",fontSize:"11px",fontWeight:"600",fontFamily:"monospace"}}>{selTFs.execution}</span>
+                        </td>
+                        <td style={{padding:"7px 10px",color:"#94A3B8",fontSize:"11px",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={t.reasons?.map(r=>r.label).join(", ")}>
+                          {t.reasons?.slice(0,2).map(r=>r.label).join(", ")||"—"}
+                        </td>
+                      </tr>))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>)}
+        
+        {tab==="backtest"&&!btResult&&(<div style={{background:"white",borderRadius:"12px",padding:"50px 20px",textAlign:"center",border:"1px solid #E2E8F0"}}><div style={{fontSize:"48px",marginBottom:"12px"}}>📊</div><div style={{fontSize:"17px",fontWeight:"700",marginBottom:"8px"}}>No Backtest Yet</div><div style={{fontSize:"14px",color:"#64748B"}}>Go to <strong style={{color:"#1D4ED8"}}>🎯 Strategies</strong> tab → pick a strategy → click <strong style={{color:"#7C3AED"}}>🧠 BT + Learn</strong></div></div>)}
+
         {tab==="tradelog"&&(
           <div style={{display:"grid",gap:"12px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontWeight:"700",fontSize:"16px"}}>📓 Trade Journal — {tradeLog.length} trades recorded</div>
-              <button onClick={()=>setShowAddTrade(!showAddTrade)} style={{background:"#1D4ED8",color:"white",border:"none",borderRadius:"8px",padding:"8px 16px",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>+ Add Trade</button>
-            </div>
-            {showAddTrade&&(
-              <div style={{background:"white",borderRadius:"12px",padding:"18px",border:"1px solid #E2E8F0"}}>
-                <div style={{fontWeight:"700",fontSize:"15px",marginBottom:"14px"}}>Record a Trade</div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",marginBottom:"10px"}}>
-                  {[{l:"Date",k:"date",type:"date"},{l:"Symbol",k:"sym",type:"select",opts:Object.keys(SYMS)},{l:"Direction",k:"dir",type:"select",opts:["LONG","SHORT"]},{l:"Entry",k:"entry",type:"number"},{l:"Stop Loss",k:"sl",type:"number"},{l:"TP1",k:"tp1",type:"number"},{l:"TP2",k:"tp2",type:"number"},{l:"P&L (₹)",k:"pnl",type:"number"},{l:"Result",k:"result",type:"select",opts:["WIN","LOSS","BREAKEVEN","RUNNING"]}].map(f=>(
-                    <div key={f.k}><label style={{fontSize:"11px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"3px"}}>{f.l}</label>
-                      {f.type==="select"?<select value={newTrade[f.k]} onChange={e=>setNewTrade(p=>({...p,[f.k]:e.target.value}))} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B"}}>{f.opts.map(o=><option key={o} value={o}>{o}</option>)}</select>
-                      :<input type={f.type} value={newTrade[f.k]} onChange={e=>setNewTrade(p=>({...p,[f.k]:e.target.value}))} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B",boxSizing:"border-box"}}/> }
-                    </div>))}
-                </div>
-                <div style={{marginBottom:"10px"}}><label style={{fontSize:"11px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"3px"}}>Notes / ICT Setup Used</label><textarea value={newTrade.notes} onChange={e=>setNewTrade(p=>({...p,notes:e.target.value}))} rows={2} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B",boxSizing:"border-box",resize:"vertical"}}/></div>
-                <div style={{display:"flex",gap:"8px"}}>
-                  <button onClick={()=>{const t={...newTrade,id:Date.now()};const log=[t,...tradeLog];saveTradeLog(log);setShowAddTrade(false);setNewTrade({date:"",sym:"XAUUSD",dir:"LONG",entry:"",sl:"",tp1:"",tp2:"",result:"",pnl:"",notes:""});}} style={{background:"#16A34A",color:"white",border:"none",borderRadius:"8px",padding:"9px 20px",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>Save Trade</button>
-                  <button onClick={()=>setShowAddTrade(false)} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#374151",borderRadius:"8px",padding:"9px 16px",fontSize:"13px",cursor:"pointer"}}>Cancel</button>
-                </div>
-              </div>)}
-            {/* Log table */}
-            {tradeLog.length>0?(
-              <div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",overflow:"hidden"}}>
-                <div style={{display:"grid",gridTemplateColumns:"90px 70px 60px 90px 90px 90px 80px 70px 1fr 60px",gap:"8px",padding:"8px 14px",background:"#F8FAFC",borderTop:"none",fontSize:"11px",fontWeight:"700",color:"#94A3B8"}}>
-                  <span>DATE</span><span>SYM</span><span>DIR</span><span>ENTRY</span><span>SL</span><span>TP1</span><span>RESULT</span><span>P&L</span><span>NOTES</span><span></span>
-                </div>
-                {tradeLog.map((t,i)=>(
-                  <div key={t.id} style={{display:"grid",gridTemplateColumns:"90px 70px 60px 90px 90px 90px 80px 70px 1fr 60px",gap:"8px",padding:"10px 14px",background:i%2===0?"white":"#FAFAFA",borderTop:"1px solid #F1F5F9",fontSize:"13px",alignItems:"center"}}>
-                    <span style={{color:"#374151",fontFamily:"monospace"}}>{t.date}</span>
-                    <span style={{fontWeight:"700",color:SYMS[t.sym]?.color||"#374151"}}>{t.sym}</span>
-                    <span style={{color:t.dir==="LONG"?"#16A34A":"#DC2626",fontWeight:"700"}}>{t.dir==="LONG"?"▲":"▼"}</span>
-                    <span style={{fontFamily:"monospace",fontWeight:"600",color:"#1D4ED8"}}>{t.entry}</span>
-                    <span style={{fontFamily:"monospace",color:"#EF4444"}}>{t.sl}</span>
-                    <span style={{fontFamily:"monospace",color:"#16A34A"}}>{t.tp1}</span>
-                    <span style={{background:t.result==="WIN"?"#DCFCE7":t.result==="LOSS"?"#FEE2E2":"#F1F5F9",color:t.result==="WIN"?"#16A34A":t.result==="LOSS"?"#DC2626":"#64748B",padding:"2px 8px",borderRadius:"20px",fontSize:"11px",fontWeight:"700",textAlign:"center"}}>{t.result}</span>
-                    <span style={{fontWeight:"700",color:parseFloat(t.pnl)>=0?"#16A34A":"#DC2626",fontFamily:"monospace"}}>{t.pnl?`₹${Number(t.pnl).toLocaleString()}`:"-"}</span>
-                    <span style={{color:"#64748B",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:"12px"}}>{t.notes}</span>
-                    <button onClick={()=>{if(window.confirm("Delete this trade?"))saveTradeLog(tradeLog.filter(x=>x.id!==t.id));}} style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#DC2626",borderRadius:"5px",padding:"3px 7px",fontSize:"11px",cursor:"pointer"}}>✕</button>
-                  </div>))}
-                {/* Summary */}
-                <div style={{padding:"12px 14px",background:"#F8FAFC",borderTop:"2px solid #E2E8F0",display:"flex",gap:"20px",fontSize:"13px"}}>
-                  <span>Total: <strong>{tradeLog.length}</strong></span>
-                  <span style={{color:"#16A34A"}}>Wins: <strong>{tradeLog.filter(t=>t.result==="WIN").length}</strong></span>
-                  <span style={{color:"#DC2626"}}>Losses: <strong>{tradeLog.filter(t=>t.result==="LOSS").length}</strong></span>
-                  <span>WR: <strong>{tradeLog.length?Math.round(tradeLog.filter(t=>t.result==="WIN").length/tradeLog.filter(t=>["WIN","LOSS"].includes(t.result)).length*100)||0:0}%</strong></span>
-                  <span>Net P&L: <strong style={{color:tradeLog.reduce((s,t)=>s+Number(t.pnl||0),0)>=0?"#16A34A":"#DC2626"}}>₹{tradeLog.reduce((s,t)=>s+Number(t.pnl||0),0).toLocaleString()}</strong></span>
-                </div>
-              </div>):<div style={{background:"white",borderRadius:"12px",padding:"40px 20px",textAlign:"center",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:"14px"}}>No trades logged yet. Click <strong>+ Add Trade</strong> to start your journal.</div>}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontWeight:"700",fontSize:"16px"}}>📓 Trade Journal — {tradeLog.length} trades</div><button onClick={()=>setShowAddTrade(!showAddTrade)} style={{background:"#1D4ED8",color:"white",border:"none",borderRadius:"8px",padding:"8px 16px",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>+ Add Trade</button></div>
+            {showAddTrade&&(<div style={{background:"white",borderRadius:"12px",padding:"18px",border:"1px solid #E2E8F0"}}><div style={{fontWeight:"700",fontSize:"15px",marginBottom:"14px"}}>Record a Trade</div><div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",marginBottom:"10px"}}>{[{l:"Date",k:"date",type:"date"},{l:"Symbol",k:"sym",type:"select",opts:Object.keys(SYMS)},{l:"Direction",k:"dir",type:"select",opts:["LONG","SHORT"]},{l:"Entry",k:"entry",type:"number"},{l:"Stop Loss",k:"sl",type:"number"},{l:"TP1",k:"tp1",type:"number"},{l:"TP2",k:"tp2",type:"number"},{l:"P&L (₹)",k:"pnl",type:"number"},{l:"Result",k:"result",type:"select",opts:["WIN","LOSS","BREAKEVEN","RUNNING"]}].map(f=>(<div key={f.k}><label style={{fontSize:"11px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"3px"}}>{f.l}</label>{f.type==="select"?<select value={newTrade[f.k]} onChange={e=>setNewTrade(p=>({...p,[f.k]:e.target.value}))} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B"}}>{f.opts.map(o=><option key={o} value={o}>{o}</option>)}</select>:<input type={f.type} value={newTrade[f.k]} onChange={e=>setNewTrade(p=>({...p,[f.k]:e.target.value}))} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B",boxSizing:"border-box"}}/>}</div>))}</div><div style={{marginBottom:"10px"}}><label style={{fontSize:"11px",fontWeight:"600",color:"#64748B",display:"block",marginBottom:"3px"}}>Notes</label><textarea value={newTrade.notes} onChange={e=>setNewTrade(p=>({...p,notes:e.target.value}))} rows={2} style={{width:"100%",background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"7px",padding:"8px",fontSize:"13px",outline:"none",color:"#1E293B",boxSizing:"border-box",resize:"vertical"}}/></div><div style={{display:"flex",gap:"8px"}}><button onClick={()=>{const t={...newTrade,id:Date.now()};const log=[t,...tradeLog];saveTradeLog(log);setShowAddTrade(false);setNewTrade({date:"",sym:"XAUUSD",dir:"LONG",entry:"",sl:"",tp1:"",tp2:"",result:"",pnl:"",notes:""}); }} style={{background:"#16A34A",color:"white",border:"none",borderRadius:"8px",padding:"9px 20px",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>Save Trade</button><button onClick={()=>setShowAddTrade(false)} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#374151",borderRadius:"8px",padding:"9px 16px",fontSize:"13px",cursor:"pointer"}}>Cancel</button></div></div>)}
+            {tradeLog.length>0?(<div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",overflow:"hidden"}}><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}><thead><tr style={{background:"#F8FAFC"}}>{["DATE","SYM","DIR","ENTRY","SL","TP1","RESULT","P&L (₹)","NOTES",""].map(h=>(<th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:"11px",fontWeight:"700",color:"#64748B",borderBottom:"2px solid #E2E8F0",whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{tradeLog.map((t,i)=>(<tr key={t.id} style={{borderBottom:"1px solid #F1F5F9",background:i%2===0?"white":"#FAFAFA"}}><td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:"11px",color:"#374151"}}>{t.date}</td><td style={{padding:"7px 10px",fontWeight:"700",color:SYMS[t.sym]?.color||"#374151"}}>{t.sym}</td><td style={{padding:"7px 10px",color:t.dir==="LONG"?"#16A34A":"#DC2626",fontWeight:"700"}}>{t.dir==="LONG"?"▲":"▼"}</td><td style={{padding:"7px 10px",fontFamily:"monospace",fontWeight:"600",color:"#1D4ED8"}}>{t.entry}</td><td style={{padding:"7px 10px",fontFamily:"monospace",color:"#EF4444"}}>{t.sl}</td><td style={{padding:"7px 10px",fontFamily:"monospace",color:"#16A34A"}}>{t.tp1}</td><td style={{padding:"7px 10px"}}><span style={{background:t.result==="WIN"?"#DCFCE7":t.result==="LOSS"?"#FEE2E2":"#F1F5F9",color:t.result==="WIN"?"#16A34A":t.result==="LOSS"?"#DC2626":"#64748B",padding:"2px 8px",borderRadius:"20px",fontSize:"11px",fontWeight:"700"}}>{t.result}</span></td><td style={{padding:"7px 10px",fontWeight:"700",color:parseFloat(t.pnl)>=0?"#16A34A":"#DC2626",fontFamily:"monospace"}}>{t.pnl?"₹"+Number(t.pnl).toLocaleString():"-"}</td><td style={{padding:"7px 10px",color:"#64748B",fontSize:"11px",maxWidth:"150px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.notes}</td><td style={{padding:"7px 10px"}}><button onClick={()=>{if(window.confirm("Delete?"))saveTradeLog(tradeLog.filter(x=>x.id!==t.id));}} style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#DC2626",borderRadius:"5px",padding:"3px 7px",fontSize:"11px",cursor:"pointer"}}>✕</button></td></tr>))}</tbody></table></div><div style={{padding:"10px 14px",background:"#F8FAFC",borderTop:"2px solid #E2E8F0",display:"flex",gap:"20px",fontSize:"13px"}}><span>Total: <strong>{tradeLog.length}</strong></span><span style={{color:"#16A34A"}}>Wins: <strong>{tradeLog.filter(t=>t.result==="WIN").length}</strong></span><span style={{color:"#DC2626"}}>Losses: <strong>{tradeLog.filter(t=>t.result==="LOSS").length}</strong></span><span>Net P&L: <strong style={{color:tradeLog.reduce((s,t)=>s+Number(t.pnl||0),0)>=0?"#16A34A":"#DC2626"}}>₹{tradeLog.reduce((s,t)=>s+Number(t.pnl||0),0).toLocaleString()}</strong></span></div></div>):<div style={{background:"white",borderRadius:"12px",padding:"40px 20px",textAlign:"center",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:"14px"}}>No trades logged. Click <strong>+ Add Trade</strong> to start your journal.</div>}
           </div>)}
 
-        {/* ── LEARNING TAB ── */}
+
+        {tab==="simulator"&&(<div style={{display:"grid",gap:"12px"}}>
+          {analysis?(<div style={{background:"white",borderRadius:"12px",padding:"18px",border:`2px solid ${analysis.dir==="LONG"?"#86EFAC":"#FCA5A5"}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"14px",flexWrap:"wrap",gap:"10px"}}><div><div style={{fontWeight:"800",fontSize:"18px",color:analysis.dir==="LONG"?"#16A34A":"#DC2626",marginBottom:"4px"}}>{analysis.dir==="LONG"?"▲ LONG":"▼ SHORT"} Signal — {sym}</div><div style={{fontSize:"13px",color:"#64748B"}}>Entry: <strong style={{fontFamily:"monospace",color:"#1D4ED8"}}>{analysis.entry}</strong> · SL: <strong style={{fontFamily:"monospace",color:"#EF4444"}}>{analysis.sl}</strong> · TP1: <strong style={{fontFamily:"monospace",color:"#16A34A"}}>{analysis.tp1}</strong> · TP2: <strong style={{fontFamily:"monospace",color:"#059669"}}>{analysis.tp2}</strong></div><div style={{fontSize:"12px",color:"#94A3B8",marginTop:"4px"}}>R:R {analysis.rr} · SL {analysis.slPips}p · TP {analysis.tp1Pips}p · Conf {analysis.conf}%</div></div><button onClick={()=>{if(activeSim){alert("Close active simulation first");return;}const trade={id:Date.now(),sym,dir:analysis.dir,entry:analysis.entry,sl:analysis.sl,tp1:analysis.tp1,tp2:analysis.tp2,rr:analysis.rr,slPips:analysis.slPips,tp1Pips:analysis.tp1Pips,conf:analysis.conf,tf:chartTF,entryTF:selTFs.entry,execTF:selTFs.execution,reasons:analysis.reasons.map(r=>r.label),kz:activeKZ?.name||"None",amd:analysis.amd?.phase||"",openTime:istStr(nowIST()),openPrice:prices[sym]||analysis.entry,capital,riskPct,riskAmt:posCalc?.riskAmt||0,status:"OPEN",result:null,pnl:null,closePrice:null,closeTime:null};setActiveSim(trade);}} style={{background:"linear-gradient(135deg,#1D4ED8,#7C3AED)",color:"white",border:"none",borderRadius:"10px",padding:"12px 24px",fontWeight:"700",fontSize:"14px",cursor:"pointer"}}>🎮 Take This Trade</button></div>{posCalc&&<div style={{display:"flex",gap:"16px",padding:"10px 14px",background:"#F8FAFC",borderRadius:"8px",fontSize:"13px",flexWrap:"wrap"}}><span>Risk: <strong style={{color:"#EF4444"}}>{"₹"}{posCalc.riskAmt?.toLocaleString()}</strong></span><span>Max Profit TP1: <strong style={{color:"#16A34A"}}>{"₹"}{posCalc.maxProfit1?.toLocaleString()}</strong></span><span>Max Profit TP2: <strong style={{color:"#059669"}}>{"₹"}{posCalc.maxProfit2?.toLocaleString()}</strong></span><span>Max DD: <strong style={{color:"#DC2626"}}>{"₹"}{posCalc.maxDD?.toLocaleString()}</strong></span></div>}</div>):(<div style={{background:"white",borderRadius:"12px",padding:"30px",textAlign:"center",border:"1px solid #E2E8F0",color:"#94A3B8"}}>Click <strong style={{color:"#1D4ED8"}}>Analyze</strong> first to generate a signal, then take the trade here.</div>)}
+          {activeSim&&(<div style={{background:"white",borderRadius:"12px",padding:"18px",border:"2px solid #FDE047"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px",flexWrap:"wrap",gap:"8px"}}><div style={{fontWeight:"700",fontSize:"16px",color:"#92400E"}}>⏱ Live Simulation — {activeSim.sym}</div><div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>{[{label:"✅ TP1 Hit",result:"WIN_TP1",pnl:posCalc?.maxProfit1||0},{label:"✅ TP2 Hit",result:"WIN_TP2",pnl:posCalc?.maxProfit2||0},{label:"❌ SL Hit",result:"LOSS",pnl:posCalc?-posCalc.maxLoss:0},{label:"⚡ Close",result:"MANUAL",pnl:null}].map(btn=>(<button key={btn.result} onClick={()=>{const closed={...activeSim,status:"CLOSED",result:btn.result,pnl:btn.pnl,closePrice:prices[activeSim.sym]||activeSim.entry,closeTime:istStr(nowIST())};saveSimTrades([closed,...simTrades]);setActiveSim(null);}} style={{background:btn.result.startsWith("WIN")?"#F0FDF4":btn.result==="LOSS"?"#FEF2F2":"#FFFBEB",border:"1.5px solid #E2E8F0",color:btn.result.startsWith("WIN")?"#16A34A":btn.result==="LOSS"?"#DC2626":"#D97706",borderRadius:"7px",padding:"6px 11px",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>{btn.label}</button>))}</div></div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"10px",marginBottom:"12px"}}>{[{l:"ENTRY",v:activeSim.entry,c:"#1D4ED8"},{l:"CURRENT",v:prices[activeSim.sym]?.toFixed?.(activeSim.sym==="NATGAS"?3:2)||"—",c:"#374151"},{l:"STOP LOSS",v:activeSim.sl,c:"#DC2626"},{l:"TP1",v:activeSim.tp1,c:"#16A34A"},{l:"TP2",v:activeSim.tp2,c:"#059669"}].map(x=>(<div key={x.l} style={{background:"#F8FAFC",borderRadius:"8px",padding:"10px",textAlign:"center"}}><div style={{color:"#94A3B8",fontSize:"10px",fontWeight:"600",marginBottom:"4px"}}>{x.l}</div><div style={{color:x.c,fontWeight:"800",fontSize:"16px",fontFamily:"monospace"}}>{x.v}</div></div>))}</div>
+          {(()=>{const cur=prices[activeSim.sym];if(!cur||!posCalc)return null;const dist=activeSim.dir==="LONG"?cur-activeSim.entry:activeSim.entry-cur;const slDist=Math.abs(activeSim.entry-activeSim.sl)||1;const livePnl=+(dist/slDist*posCalc.riskAmt).toFixed(0);const livePips=+(dist*100).toFixed(1);const isProfit=livePnl>=0;return(<div style={{padding:"12px 16px",background:isProfit?"#F0FDF4":"#FEF2F2",borderRadius:"8px",border:`1px solid ${isProfit?"#86EFAC":"#FECACA"}`,display:"flex",gap:"24px",alignItems:"center",flexWrap:"wrap"}}><div><div style={{fontSize:"11px",color:"#64748B",marginBottom:"2px"}}>LIVE P&L</div><div style={{fontWeight:"800",fontSize:"24px",color:isProfit?"#16A34A":"#DC2626",fontFamily:"monospace"}}>{isProfit?"+":" "}{"₹"}{Math.abs(livePnl).toLocaleString()}</div></div><div><div style={{fontSize:"11px",color:"#64748B",marginBottom:"2px"}}>PIPS</div><div style={{fontWeight:"700",fontSize:"20px",color:isProfit?"#16A34A":"#DC2626",fontFamily:"monospace"}}>{isProfit?"+":""}{livePips}</div></div><div><div style={{fontSize:"11px",color:"#64748B",marginBottom:"2px"}}>OPEN SINCE</div><div style={{fontSize:"13px"}}>{activeSim.openTime}</div></div></div>);})()} 
+          </div>)}
+          <div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",overflow:"hidden"}}><div style={{padding:"10px 14px",borderBottom:"1px solid #F1F5F9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#FAFAFA"}}><span style={{fontWeight:"700",fontSize:"14px"}}>📊 Simulation History ({simTrades.length} trades)</span><div style={{display:"flex",gap:"12px",fontSize:"13px",alignItems:"center"}}><span style={{color:"#16A34A"}}>Wins: <strong>{simTrades.filter(t=>t.result?.startsWith("WIN")).length}</strong></span><span style={{color:"#DC2626"}}>Losses: <strong>{simTrades.filter(t=>t.result==="LOSS").length}</strong></span><span>Net P&L: <strong style={{color:simTrades.reduce((s,t)=>s+Number(t.pnl||0),0)>=0?"#16A34A":"#DC2626"}}>{"₹"}{simTrades.reduce((s,t)=>s+Number(t.pnl||0),0).toLocaleString()}</strong></span>{simTrades.length>0&&<button onClick={()=>{if(window.confirm("Clear simulations?"))saveSimTrades([]);}} style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#DC2626",borderRadius:"5px",padding:"2px 8px",fontSize:"11px",cursor:"pointer"}}>Clear</button>}</div></div>
+          {simTrades.length===0?<div style={{padding:"40px",textAlign:"center",color:"#94A3B8",fontSize:"14px"}}>No simulations yet — click "Take This Trade" after analyzing.</div>:(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}><thead><tr style={{background:"#F8FAFC"}}>{["TIME","SYM","DIR","RESULT","ENTRY","CLOSE","SL","TP1","PIPS","P&L (₹)","R:R","ENTRY TF","EXEC TF","KZ","CONFLUENCES"].map(h=>(<th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:"11px",fontWeight:"700",color:"#64748B",borderBottom:"2px solid #E2E8F0",whiteSpace:"nowrap"}}>{h}</th>))}</tr></thead><tbody>{simTrades.map((t,i)=>{const isWin=t.result?.startsWith("WIN");return(<tr key={t.id} style={{borderBottom:"1px solid #F1F5F9",background:i%2===0?"white":"#FAFAFA"}}><td style={{padding:"7px 10px",fontSize:"11px",color:"#94A3B8",whiteSpace:"nowrap"}}>{t.closeTime||t.openTime}</td><td style={{padding:"7px 10px",fontWeight:"700"}}>{t.sym}</td><td style={{padding:"7px 10px",color:t.dir==="LONG"?"#16A34A":"#DC2626",fontWeight:"700"}}>{t.dir==="LONG"?"▲":"▼"} {t.dir}</td><td style={{padding:"7px 10px"}}><span style={{background:isWin?"#DCFCE7":t.result==="LOSS"?"#FEE2E2":"#F1F5F9",color:isWin?"#16A34A":t.result==="LOSS"?"#DC2626":"#64748B",padding:"2px 8px",borderRadius:"20px",fontSize:"11px",fontWeight:"700"}}>{t.result||"OPEN"}</span></td><td style={{padding:"7px 10px",fontFamily:"monospace",color:"#1D4ED8",fontWeight:"600"}}>{t.entry}</td><td style={{padding:"7px 10px",fontFamily:"monospace"}}>{t.closePrice||"—"}</td><td style={{padding:"7px 10px",fontFamily:"monospace",color:"#EF4444"}}>{t.sl}</td><td style={{padding:"7px 10px",fontFamily:"monospace",color:"#16A34A"}}>{t.tp1}</td><td style={{padding:"7px 10px",fontFamily:"monospace"}}>{t.slPips}</td><td style={{padding:"7px 10px",fontWeight:"700",color:isWin?"#16A34A":"#DC2626",fontFamily:"monospace"}}>{t.pnl!=null?(isWin?"+":"")+"₹"+Math.abs(Number(t.pnl)).toLocaleString():"—"}</td><td style={{padding:"7px 10px",color:"#7C3AED",fontWeight:"700"}}>{t.rr}</td><td style={{padding:"7px 10px"}}><span style={{background:"#FFFBEB",color:"#D97706",padding:"1px 6px",borderRadius:"4px",fontSize:"11px",fontWeight:"600",fontFamily:"monospace"}}>{t.entryTF||"—"}</span></td><td style={{padding:"7px 10px"}}><span style={{background:"#F0FDF4",color:"#16A34A",padding:"1px 6px",borderRadius:"4px",fontSize:"11px",fontWeight:"600",fontFamily:"monospace"}}>{t.execTF||"—"}</span></td><td style={{padding:"7px 10px",fontSize:"11px",color:"#64748B"}}>{t.kz||"—"}</td><td style={{padding:"7px 10px",fontSize:"11px",color:"#94A3B8",maxWidth:"130px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={t.reasons?.join(", ")}>{t.reasons?.slice(0,2).join(", ")||"—"}</td></tr>);})}  </tbody></table></div>)}
+          </div>
+        </div>)}
+
         {tab==="learning"&&(
           <div style={{display:"grid",gap:"12px"}}>
             {learnLog.length>0&&<div style={{background:"#F5F3FF",borderRadius:"12px",padding:"16px 18px",border:"1.5px solid #DDD6FE"}}><div style={{fontWeight:"700",fontSize:"15px",color:"#7C3AED",marginBottom:"10px"}}>🧠 Latest Learning Session</div>{learnLog.map((e,i)=><div key={i} style={{fontSize:"13px",padding:"5px 0",color:e.startsWith("↑")||e.startsWith("✅")||e.startsWith("📈")?"#16A34A":e.startsWith("↓")||e.startsWith("⚠️")?"#DC2626":"#374151",lineHeight:"1.6",borderBottom:i<learnLog.length-1?"1px solid #EDE9FE":"none"}}>{e}</div>)}</div>}
             <div style={{background:"white",borderRadius:"12px",padding:"16px 18px",border:"1px solid #E2E8F0"}}>
               <div style={{fontWeight:"700",fontSize:"15px",marginBottom:"10px"}}>📚 Learning History ({brain.learningLog?.length||0} sessions)</div>
-              {!brain.learningLog?.length&&<div style={{color:"#94A3B8",fontSize:"14px",textAlign:"center",padding:"28px"}}>No learning history. Click BT + Learn to start improving.</div>}
+              {!brain.learningLog?.length&&<div style={{color:"#94A3B8",fontSize:"14px",textAlign:"center",padding:"28px"}}>No history. Click BT + Learn to start.</div>}
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}}>
-                {brain.learningLog?.map((s,i)=>(
-                  <div key={i} style={{background:"#F8FAFC",borderRadius:"10px",padding:"12px",border:"1px solid #E2E8F0"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:"5px"}}><span style={{color:"#7C3AED",fontWeight:"700",fontSize:"14px"}}>Gen {s.gen} · {s.sym}</span><span style={{color:"#94A3B8",fontSize:"12px"}}>{s.date}</span></div>
-                    <div style={{display:"flex",gap:"12px",marginBottom:"4px"}}><span style={{color:s.winRate>=65?"#16A34A":s.winRate>=50?"#D97706":"#DC2626",fontWeight:"700",fontSize:"15px"}}>{s.winRate}% WR</span><span style={{color:"#64748B",fontSize:"13px"}}>{s.totalTrades} trades</span></div>
-                    {s.changes?.slice(0,3).map((c,j)=><div key={j} style={{color:"#64748B",fontSize:"12px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>· {c}</div>)}
-                  </div>))}</div>
+                {brain.learningLog?.map((s,i)=>(<div key={i} style={{background:"#F8FAFC",borderRadius:"10px",padding:"12px",border:"1px solid #E2E8F0"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:"5px"}}><span style={{color:"#7C3AED",fontWeight:"700",fontSize:"14px"}}>Gen {s.gen} · {s.sym}</span><span style={{color:"#94A3B8",fontSize:"12px"}}>{s.date}</span></div><div style={{display:"flex",gap:"12px",marginBottom:"4px"}}><span style={{color:s.winRate>=65?"#16A34A":s.winRate>=50?"#D97706":"#DC2626",fontWeight:"700",fontSize:"15px"}}>{s.winRate}% WR</span><span style={{color:"#64748B",fontSize:"13px"}}>{s.totalTrades} trades</span></div>{s.changes?.slice(0,3).map((c,j)=><div key={j} style={{color:"#64748B",fontSize:"12px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>· {c}</div>)}</div>))}
+              </div>
             </div>
           </div>)}
 
-        {/* AI CHAT */}
-        <div style={{background:"white",borderRadius:"12px",border:"1px solid #E2E8F0",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-          <div style={{padding:"12px 16px",borderBottom:"1px solid #F1F5F9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#FAFAFA"}}>
-            <div><div style={{fontWeight:"700",fontSize:"15px"}}>🤖 ICT Sovereign Analyst — AI Chat</div><div style={{fontSize:"12px",color:"#64748B",marginTop:"2px"}}>Trained on "The Sovereign Trader" · Gen {brain.generations} · {isLive?`${liveCount}/4 Live`:"Sim"} · {activeKZ?activeKZ.name:"No active session"}{!aiKey&&<span style={{color:"#DC2626",marginLeft:"8px"}}>⚠️ Add Anthropic key in ⚙️</span>}</div></div>
-          </div>
-          <div style={{height:"260px",overflowY:"auto",padding:"12px",display:"flex",flexDirection:"column",gap:"8px"}}>
-            {chat.map((m,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                <div style={{maxWidth:"76%",padding:"10px 14px",borderRadius:m.role==="user"?"13px 13px 2px 13px":"13px 13px 13px 2px",background:m.role==="user"?"#1D4ED8":"#F8FAFC",color:m.role==="user"?"white":"#1E293B",fontSize:"14px",lineHeight:"1.6",whiteSpace:"pre-wrap",border:m.role==="assistant"?"1px solid #E2E8F0":"none"}}>{m.content}</div>
-              </div>))}
-            {chatLoading&&<div style={{display:"flex",gap:"5px",padding:"10px 14px",background:"#F8FAFC",borderRadius:"13px",width:"fit-content",border:"1px solid #E2E8F0"}}>{[0,1,2].map(i=><div key={i} style={{width:"8px",height:"8px",borderRadius:"50%",background:"#7C3AED",animation:`dot ${0.5+i*0.15}s infinite alternate`}}/>)}</div>}
-            <div ref={chatRef}/>
-          </div>
-          <div style={{padding:"10px 12px",borderTop:"1px solid #F1F5F9",display:"flex",gap:"8px"}}>
-            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&handleChat()} placeholder={aiKey?"Ask about ICT setups, Sovereign strategies, signals...":"Add Anthropic key in ⚙️ first"} style={{flex:1,background:"#F8FAFC",border:"2px solid #E2E8F0",borderRadius:"10px",padding:"10px 14px",color:"#1E293B",fontSize:"14px",outline:"none",fontFamily:"inherit"}} onFocus={e=>e.target.style.borderColor="#1D4ED8"} onBlur={e=>e.target.style.borderColor="#E2E8F0"}/>
-            <button onClick={handleChat} disabled={chatLoading||!aiKey} style={{background:aiKey?"linear-gradient(135deg,#1D4ED8,#4338CA)":"#E2E8F0",color:aiKey?"white":"#94A3B8",border:"none",borderRadius:"10px",padding:"10px 18px",fontWeight:"700",cursor:aiKey?"pointer":"not-allowed",fontSize:"18px"}}>➤</button>
-          </div>
-          <div style={{padding:"0 12px 12px",display:"flex",gap:"5px",flexWrap:"wrap"}}>
-            {["Is London KZ open?","Gold OB setup?","Explain OTE entry","What is Judas swing?","Silver Bullet setup?","AMD phase now?","FVG CE entry?","BSL/SSL on chart?","Best scalp session?"].map(q=>(
-              <button key={q} onClick={()=>setChatInput(q)} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#64748B",borderRadius:"20px",padding:"3px 9px",fontSize:"11px",cursor:"pointer",whiteSpace:"nowrap",fontWeight:"500"}}>{q}</button>))}
-          </div>
-        </div>
-
-        <div style={{textAlign:"center",padding:"8px",color:"#CBD5E1",fontSize:"11px"}}>ICT Sovereign Trader v12 · Mumbai IST · Based on "The Sovereign Trader" · {brain.totalTrades} trades learned · Gen {brain.generations} · {userEmail}</div>
+        <div style={{height:"80px"}}/>
       </div>
-      <style>{`@keyframes dot{from{transform:scale(0.7);opacity:0.4}to{transform:scale(1.3);opacity:1}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:#F1F5F9}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}select option{background:white;color:#1E293B}input[type=range]{accent-color:#1D4ED8}`}</style>
-    </div>);}
+
+      {/* ── FLOATING CHAT — bottom right corner ── */}
+      <div style={{position:"fixed",bottom:"20px",right:"20px",zIndex:500,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"8px",fontFamily:"'Inter','Segoe UI',sans-serif"}}>
+        {chatOpen&&(
+          <div style={{width:"380px",background:"white",borderRadius:"16px",border:"1px solid #E2E8F0",boxShadow:"0 8px 32px rgba(0,0,0,0.12)",display:"flex",flexDirection:"column",maxHeight:"520px"}}>
+            <div style={{padding:"12px 16px",borderBottom:"1px solid #F1F5F9",display:"flex",justifyContent:"space-between",alignItems:"center",background:"linear-gradient(135deg,#1D4ED8,#7C3AED)",borderRadius:"15px 15px 0 0"}}>
+              <div><div style={{fontWeight:"700",fontSize:"14px",color:"white"}}>🤖 ICT Sovereign Analyst</div><div style={{fontSize:"11px",color:"rgba(255,255,255,0.75)",marginTop:"1px"}}>{isLive?`${liveCount}/4 Live`:"Sim"} · {activeKZ?activeKZ.name:"No session"} · Gen {brain.generations}</div></div>
+              <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:"6px",color:"white",padding:"4px 8px",cursor:"pointer",fontSize:"14px"}}>✕</button>
+            </div>
+            {!aiKey&&<div style={{padding:"10px 14px",background:"#FFFBEB",borderBottom:"1px solid #FDE047",fontSize:"12px",color:"#92400E",textAlign:"center"}}>⚠️ Add Anthropic key in ⚙️ Settings to enable AI chat</div>}
+            <div style={{flex:1,overflowY:"auto",padding:"12px",display:"flex",flexDirection:"column",gap:"8px",minHeight:"200px",maxHeight:"340px"}}>
+              {chat.map((m,i)=>(<div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}><div style={{maxWidth:"88%",padding:"9px 13px",borderRadius:m.role==="user"?"13px 13px 2px 13px":"13px 13px 13px 2px",background:m.role==="user"?"linear-gradient(135deg,#1D4ED8,#4338CA)":"#F8FAFC",color:m.role==="user"?"white":"#1E293B",fontSize:"13px",lineHeight:"1.6",whiteSpace:"pre-wrap",border:m.role==="assistant"?"1px solid #E2E8F0":"none",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>{m.content}</div></div>))}
+              {chatLoading&&<div style={{display:"flex",gap:"4px",padding:"9px 13px",background:"#F8FAFC",borderRadius:"13px",width:"fit-content",border:"1px solid #E2E8F0"}}>{[0,1,2].map(i=><div key={i} style={{width:"7px",height:"7px",borderRadius:"50%",background:"#7C3AED",animation:`dot ${0.5+i*0.15}s infinite alternate`}}/>)}</div>}
+              <div ref={chatRef}/>
+            </div>
+            <div style={{padding:"8px 12px",borderTop:"1px solid #F1F5F9",display:"flex",flexWrap:"wrap",gap:"4px"}}>
+              {["Gold signal?","London KZ open?","Explain OTE","Judas swing?","Silver Bullet?","AMD phase?"].map(q=>(<button key={q} onClick={()=>setChatInput(q)} style={{background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#64748B",borderRadius:"20px",padding:"3px 8px",fontSize:"11px",cursor:"pointer",whiteSpace:"nowrap"}}>{q}</button>))}
+            </div>
+            <div style={{padding:"8px 12px 12px",display:"flex",gap:"6px"}}>
+              <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&handleChat()} placeholder={aiKey?"Ask about ICT setups...":"Add API key first"} style={{flex:1,background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:"10px",padding:"9px 12px",color:"#1E293B",fontSize:"13px",outline:"none",fontFamily:"inherit"}} onFocus={e=>e.target.style.borderColor="#1D4ED8"} onBlur={e=>e.target.style.borderColor="#E2E8F0"}/>
+              <button onClick={handleChat} disabled={chatLoading||!aiKey} style={{background:aiKey?"linear-gradient(135deg,#1D4ED8,#4338CA)":"#E2E8F0",color:aiKey?"white":"#94A3B8",border:"none",borderRadius:"10px",padding:"9px 14px",fontWeight:"700",cursor:aiKey?"pointer":"not-allowed",fontSize:"16px"}}>➤</button>
+            </div>
+          </div>)}
+
+        {/* Chat toggle button */}
+        <button onClick={()=>setChatOpen(!chatOpen)}
+          style={{width:"56px",height:"56px",borderRadius:"50%",background:"linear-gradient(135deg,#1D4ED8,#7C3AED)",border:"none",color:"white",fontSize:"24px",cursor:"pointer",boxShadow:"0 4px 16px rgba(29,78,216,0.4)",display:"flex",alignItems:"center",justifyContent:"center",transition:"transform 0.2s"}}
+          onMouseEnter={e=>e.target.style.transform="scale(1.1)"}
+          onMouseLeave={e=>e.target.style.transform="scale(1)"}
+          title="ICT AI Analyst Chat">
+          {chatOpen?"✕":"🤖"}
+        </button>
+      </div>
+
+      <style>{`@keyframes dot{from{transform:scale(0.7);opacity:0.4}to{transform:scale(1.3);opacity:1}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:#F1F5F9}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}select option{background:white;color:#1E293B}input[type=range]{accent-color:#1D4ED8}table tr:hover td{background:#EFF6FF!important}`}</style>
+    </div>
+  );
+}
