@@ -398,7 +398,8 @@ function SettingsModal({onClose,onSave,times}){
 }
 // ═══════════════════════════════════════════════════════════════
 //  PROFESSIONAL CHART COMPONENT
-// ═══════════════════════════════════════════════════════════════function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS}){
+// ═══════════════════════════════════════════════════════════════
+function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS}){
   const[chartH,setChartH]=useState(460);
   const[showFVG,setShowFVG]=useState(true);const[showOB,setShowOB]=useState(true);
   const[showFib,setShowFib]=useState(false);const[showLiq,setShowLiq]=useState(true);
@@ -677,6 +678,7 @@ export default function App(){
   const[activeSim,setActiveSim]=useState(null); // currently tracking trade
   const saveSimTrades=useCallback((trades)=>{setSimTrades(trades);ls.set('ict_v12_simtrades',trades);},[]);
   
+  const[chatOpen,setChatOpen]=useState(false);
   const[chat,setChat]=useState([{role:"assistant",content:`🥇 ICT Sovereign Trader\n\nKnowledge Base: "The Sovereign Trader" — Liquidity, OBs, FVGs, AMD, OTE\n\nLondon: ${times.london.s}–${times.london.e} IST · NY: ${times.ny.s}–${times.ny.e} IST\n${(tdKey||fhKey)?"Loading real market data...":"Add API keys in Settings to get live prices."}`}]);
   const[chatInput,setChatInput]=useState("");const[chatLoading,setChatLoading]=useState(false);
   const istNow=useClock();const chatRef=useRef(null);
@@ -983,7 +985,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
               {analysis&&posCalc?(
                 <div style={{marginTop:"14px",display:"grid",gap:"8px"}}>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px"}}>
-                    {[{l:"Risk Amount",v:`₹{posCalc.riskAmt.toLocaleString()}`,c:"#EF4444",bg:"#FEF2F2",tip:"Maximum you can lose on this trade"},{l:"Lot Size",v:posCalc.lotSize,c:"#1D4ED8",bg:"#EFF6FF",tip:"Recommended position size"},{l:"SL Distance",v:`${posCalc.slPips} pips`,c:"#EF4444",bg:"#FEF2F2",tip:"Distance to stop loss"},{l:"Pip Value",v:`₹${posCalc.riskAmt/posCalc.slPips>0?(posCalc.riskAmt/posCalc.slPips).toFixed(2):0}`,c:"#D97706",bg:"#FFFBEB",tip:"Value per pip movement"}].map(x=>(
+                    {[{l:"Risk Amount",v:`₹${posCalc.riskAmt.toLocaleString()}`,c:"#EF4444",bg:"#FEF2F2",tip:"Maximum you can lose on this trade"},{l:"Lot Size",v:posCalc.lotSize,c:"#1D4ED8",bg:"#EFF6FF",tip:"Recommended position size"},{l:"SL Distance",v:`${posCalc.slPips} pips`,c:"#EF4444",bg:"#FEF2F2",tip:"Distance to stop loss"},{l:"Pip Value",v:`₹${posCalc.riskAmt/posCalc.slPips>0?(posCalc.riskAmt/posCalc.slPips).toFixed(2):0}`,c:"#D97706",bg:"#FFFBEB",tip:"Value per pip movement"}].map(x=>(
                       <div key={x.l} title={x.tip} style={{background:x.bg,borderRadius:"8px",padding:"10px",textAlign:"center",cursor:"help"}}><div style={{color:"#94A3B8",fontSize:"11px",fontWeight:"600",marginBottom:"4px"}}>{x.l}</div><div style={{color:x.c,fontWeight:"800",fontSize:"16px",fontFamily:"monospace"}}>{x.v}</div></div>))}
                   </div>
                   <div style={{padding:"12px",background:"#F0FDF4",borderRadius:"8px",border:"1px solid #BBF7D0"}}>
