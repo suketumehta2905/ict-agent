@@ -499,66 +499,288 @@ const analyzeICT = (candles, symId, weights) => {
   return { score, bias, factors, entry, sl, tp1, tp2, swH, swL, eq, range, strategy: matchedStrategy, entryTF: "15m", biasTF: "4H", timestamp: Date.now() };
 };
 
-// ─── WALK-FORWARD ENGINE ─────────────────────────────────────────
-const walkForwardEngine = (allCandles, weights, symId, windowSize = 100, stepSize = 20) => {
-  const results = [];
-  if (!allCandles || allCandles.length < windowSize + stepSize) return { results, avgWR: 0, avgPF: 0, optimizedWeights: weights };
+// ─── HISTORICAL DATA PIPELINE ────────────────────────────────────
+// Fetches long-range historical OHLCV data from Yahoo Finance via worker
+// YF supports: period=max for full history, period=5y/2y/1y for shorter
+// Tickers: GC=F (Gold 20yr+), SI=F (Silver 20yr+), CL=F (Crude 20yr+), NG=F (NatGas 10yr+)
+const fetchHistoricalData = async (symId, workerUrl, period = "5y", interval = "1d") => {
+  if (!workerUrl) return [];
+  try {
+    const sym = SYMBOLS.find(s => s.id === symId);
+    // Request long-range daily data for WFO training
+    const url = `${workerUrl}?source=yf&sym=${encodeURIComponent(sym.yf)}&type=candle&tf=${interval}&range=${period}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const d = await r.json();
+    const candles = d.candles || (Array.isArray(d) ? d : []);
+    // Normalize candle format
+    return candles.map(c => ({
+      t: c.t || c.time || c.date,
+      o: +(c.o || c.open),
+      h: +(c.h || c.high),
+      l: +(c.l || c.low),
+      c: +(c.c || c.close),
+      v: +(c.v || c.volume || 0),
+    })).filter(c => c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0);
+  } catch (e) {
+    console.error(`Historical data fetch error for ${symId}:`, e);
+    return [];
+  }
+};
 
-  for (let start = 0; start + windowSize + stepSize <= allCandles.length; start += stepSize) {
-    const trainSet = allCandles.slice(start, start + windowSize);
-    const testSet = allCandles.slice(start + windowSize, start + windowSize + stepSize);
+// ─── PROPER WALK-FORWARD OPTIMIZATION ENGINE ─────────────────────
+// Based on Robert Pardo's methodology (1992/2008):
+// 1. Split data into rolling IN-SAMPLE (70%) and OUT-OF-SAMPLE (30%) windows
+// 2. Optimize ICT pillar weights on in-sample data using grid search
+// 3. Validate the optimized weights on out-of-sample data (NO peeking)
+// 4. Roll forward and repeat
+// 5. Compile ALL out-of-sample results for true performance estimate
+// 6. Strategy passes if: overall profitable + WF Efficiency >= 50% + Max DD < 40%
 
-    // Run analysis on training set to get signal
-    const trainAnalysis = analyzeICT(trainSet, symId, weights);
-    if (trainAnalysis.bias === "NEUTRAL") continue;
+const PARAM_GRID = (() => {
+  // Generate weight combinations to test during optimization
+  // Each pillar weight can be 3, 6, 9, 12, or 15
+  // We don't test all combos (would be 5^12 = 244M), instead we test
+  // systematic variations: boost/reduce each pillar independently
+  const conceptIds = ICT_KB.concepts.map(c => c.id);
+  const baseWeights = ICT_KB.concepts.reduce((a, c) => ({ ...a, [c.id]: c.weight }), {});
+  const variations = [baseWeights]; // Start with defaults
 
-    // Validate on test set
-    let wins = 0, losses = 0;
-    for (let i = 1; i < testSet.length; i++) {
-      const testC = testSet[i];
-      if (trainAnalysis.bias === "LONG") {
-        if (testC.h >= trainAnalysis.tp1) wins++;
-        else if (testC.l <= trainAnalysis.sl) losses++;
-      } else {
-        if (testC.l <= trainAnalysis.tp1) wins++;
-        else if (testC.h >= trainAnalysis.sl) losses++;
+  // For each concept, create a "boosted" and "reduced" variant
+  conceptIds.forEach(id => {
+    const boosted = { ...baseWeights, [id]: Math.min(18, baseWeights[id] + 4) };
+    const reduced = { ...baseWeights, [id]: Math.max(2, baseWeights[id] - 4) };
+    variations.push(boosted, reduced);
+  });
+
+  // Also add some combined variations
+  const allHigh = {}; const allLow = {};
+  conceptIds.forEach(id => { allHigh[id] = 14; allLow[id] = 5; });
+  variations.push(allHigh, allLow);
+
+  // Liquidity-focused (emphasize what the ICT ebook says is most important)
+  const liqFocused = { ...baseWeights, liquidity: 16, market_structure: 14, order_blocks: 12, fair_value_gaps: 12, daily_cycle: 12 };
+  variations.push(liqFocused);
+
+  return variations;
+})();
+
+const walkForwardEngine = (allCandles, currentWeights, symId, config = {}) => {
+  const {
+    inSampleRatio = 0.7,     // 70% training, 30% testing (Pardo standard)
+    numRuns = 6,              // Number of WF runs (rolling windows)
+    minTradesPerWindow = 3,   // Minimum trades to count a window
+  } = config;
+
+  const results = {
+    runs: [],                 // Each WF run result
+    oosEquityCurve: [],       // Out-of-sample equity curve
+    optimizedWeights: { ...currentWeights },
+    summary: { avgWR: 0, avgPF: 0, totalReturn: 0, maxDD: 0, wfEfficiency: 0, isRobust: false, totalTrades: 0 },
+    dataInfo: { totalCandles: allCandles.length, period: "", runsCompleted: 0 },
+  };
+
+  if (!allCandles || allCandles.length < 100) {
+    results.dataInfo.period = "Insufficient data (need 100+ candles)";
+    return results;
+  }
+
+  const totalLen = allCandles.length;
+  const windowSize = Math.floor(totalLen / numRuns);
+  if (windowSize < 30) {
+    results.dataInfo.period = `Window too small (${windowSize} candles). Need more data.`;
+    return results;
+  }
+
+  const inSampleSize = Math.floor(windowSize * inSampleRatio);
+  const oosSampleSize = windowSize - inSampleSize;
+
+  // Record date range
+  const firstCandle = allCandles[0];
+  const lastCandle = allCandles[totalLen - 1];
+  results.dataInfo.period = `${typeof firstCandle.t === 'number' ? new Date(firstCandle.t * 1000).toISOString().split('T')[0] : String(firstCandle.t).split('T')[0]} → ${typeof lastCandle.t === 'number' ? new Date(lastCandle.t * 1000).toISOString().split('T')[0] : String(lastCandle.t).split('T')[0]}`;
+  results.dataInfo.totalCandles = totalLen;
+
+  let cumulativeEquity = 0;
+  let peakEquity = 0;
+  let maxDrawdown = 0;
+  let totalWins = 0, totalLosses = 0;
+  let totalProfitR = 0, totalLossR = 0;
+  const winningWeightSets = [];
+  const losingWeightSets = [];
+
+  // ─── ROLLING WALK-FORWARD LOOP ─────────────────────────────────
+  for (let run = 0; run < numRuns; run++) {
+    const startIdx = run * oosSampleSize; // Roll forward by OOS size each run
+    const inStart = startIdx;
+    const inEnd = Math.min(inStart + inSampleSize, totalLen);
+    const oosStart = inEnd;
+    const oosEnd = Math.min(oosStart + oosSampleSize, totalLen);
+
+    if (oosEnd > totalLen || (oosEnd - oosStart) < 10) break;
+
+    const inSampleData = allCandles.slice(inStart, inEnd);
+    const oosSampleData = allCandles.slice(oosStart, oosEnd);
+
+    // ─── STEP 1: OPTIMIZE on In-Sample data ──────────────────────
+    // Test each weight combination and find the one with best Sharpe-like score
+    let bestScore = -Infinity;
+    let bestWeights = { ...currentWeights };
+    let bestISMetrics = null;
+
+    for (const testWeights of PARAM_GRID) {
+      const metrics = simulateTradesOnData(inSampleData, symId, testWeights);
+      // Objective function: maximize (win_rate * avg_win / avg_loss) - penalize low trade count
+      const score = metrics.totalTrades >= minTradesPerWindow
+        ? (metrics.winRate / 100) * (metrics.avgWinR / Math.max(0.1, metrics.avgLossR)) * Math.sqrt(metrics.totalTrades)
+        : -1;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestWeights = testWeights;
+        bestISMetrics = metrics;
       }
     }
 
-    const totalTrades = wins + losses;
-    if (totalTrades > 0) {
-      results.push({
-        period: `${start}-${start + windowSize}`,
-        bias: trainAnalysis.bias,
-        score: trainAnalysis.score,
-        wins,
-        losses,
-        wr: ((wins / totalTrades) * 100).toFixed(1),
-        pf: losses > 0 ? (wins * 1.5 / losses).toFixed(2) : "∞",
-      });
-    }
+    // ─── STEP 2: VALIDATE on Out-of-Sample data (NO RE-OPTIMIZATION) ─
+    const oosMetrics = simulateTradesOnData(oosSampleData, symId, bestWeights);
+
+    // ─── STEP 3: Record results ──────────────────────────────────
+    const runResult = {
+      run: run + 1,
+      inSample: { start: inStart, end: inEnd, size: inEnd - inStart, ...bestISMetrics },
+      outOfSample: { start: oosStart, end: oosEnd, size: oosEnd - oosStart, ...oosMetrics },
+      optimizedWeights: { ...bestWeights },
+      optimizationScore: bestScore,
+      wfEfficiency: bestISMetrics && bestISMetrics.totalReturn !== 0
+        ? ((oosMetrics.totalReturn / Math.abs(bestISMetrics.totalReturn)) * 100).toFixed(1)
+        : "0",
+    };
+
+    results.runs.push(runResult);
+
+    // Update equity curve
+    cumulativeEquity += oosMetrics.totalReturn;
+    results.oosEquityCurve.push({ run: run + 1, equity: cumulativeEquity, wr: oosMetrics.winRate });
+    peakEquity = Math.max(peakEquity, cumulativeEquity);
+    const dd = peakEquity > 0 ? ((peakEquity - cumulativeEquity) / peakEquity) * 100 : 0;
+    maxDrawdown = Math.max(maxDrawdown, dd);
+
+    totalWins += oosMetrics.wins;
+    totalLosses += oosMetrics.losses;
+    totalProfitR += oosMetrics.totalWinR;
+    totalLossR += oosMetrics.totalLossR;
+
+    // Track which weight configs produced wins vs losses
+    if (oosMetrics.winRate >= 55) winningWeightSets.push(bestWeights);
+    else losingWeightSets.push(bestWeights);
   }
 
-  const avgWR = results.length > 0 ? (results.reduce((s, r) => s + parseFloat(r.wr), 0) / results.length).toFixed(1) : "0";
-  const avgPF = results.length > 0 ? (results.reduce((s, r) => s + (r.pf === "∞" ? 3 : parseFloat(r.pf)), 0) / results.length).toFixed(2) : "0";
+  results.dataInfo.runsCompleted = results.runs.length;
 
-  // Auto-optimize weights based on which factors appeared in winning trades
-  const optimized = { ...weights };
-  if (parseFloat(avgWR) < 55) {
-    // Reduce weights of factors that appeared in losing periods
-    const losingPeriods = results.filter(r => parseFloat(r.wr) < 50);
-    if (losingPeriods.length > results.length * 0.4) {
-      ICT_KB.concepts.forEach(c => {
-        if (optimized[c.id] > 3) optimized[c.id] = Math.max(3, (optimized[c.id] || c.weight) - 1);
-      });
-    }
-  } else if (parseFloat(avgWR) > 65) {
+  // ─── STEP 4: Compile summary from ALL out-of-sample results ────
+  const totalTrades = totalWins + totalLosses;
+  const avgWR = totalTrades > 0 ? ((totalWins / totalTrades) * 100).toFixed(1) : "0";
+  const avgPF = totalLossR > 0 ? (totalProfitR / totalLossR).toFixed(2) : totalProfitR > 0 ? "∞" : "0";
+  const avgWFE = results.runs.length > 0
+    ? (results.runs.reduce((s, r) => s + parseFloat(r.wfEfficiency || 0), 0) / results.runs.length).toFixed(1)
+    : "0";
+
+  // Robustness check (Pardo criteria)
+  const isRobust = cumulativeEquity > 0 && parseFloat(avgWFE) >= 50 && maxDrawdown < 40;
+
+  results.summary = {
+    avgWR, avgPF, totalReturn: +cumulativeEquity.toFixed(2), maxDD: +maxDrawdown.toFixed(1),
+    wfEfficiency: avgWFE, isRobust, totalTrades,
+    profitableRuns: results.runs.filter(r => r.outOfSample.totalReturn > 0).length,
+    totalRuns: results.runs.length,
+  };
+
+  // ─── STEP 5: Auto-optimize weights using winning patterns ──────
+  // Average the weights from OOS-winning runs, bias toward those
+  if (winningWeightSets.length > 0) {
+    const avgWeights = {};
     ICT_KB.concepts.forEach(c => {
-      if (optimized[c.id] < 15) optimized[c.id] = Math.min(15, (optimized[c.id] || c.weight) + 1);
+      const winAvg = winningWeightSets.reduce((s, w) => s + (w[c.id] || c.weight), 0) / winningWeightSets.length;
+      const loseAvg = losingWeightSets.length > 0
+        ? losingWeightSets.reduce((s, w) => s + (w[c.id] || c.weight), 0) / losingWeightSets.length
+        : c.weight;
+      // Bias 70% toward winning average, 30% toward reducing losing average
+      avgWeights[c.id] = Math.round(Math.max(2, Math.min(18, winAvg * 0.7 + (c.weight - (loseAvg - c.weight) * 0.3) * 0.3)));
     });
+    results.optimizedWeights = avgWeights;
   }
 
-  return { results, avgWR, avgPF, optimizedWeights: optimized };
+  return results;
+};
+
+// ─── TRADE SIMULATION ENGINE (used by WFO) ───────────────────────
+// Runs ICT analysis on rolling windows within a data segment and simulates trades
+// Each "trade" is: detect signal → enter → check if TP/SL hit within next N candles
+const simulateTradesOnData = (candles, symId, weights, lookAhead = 20) => {
+  const trades = [];
+  let wins = 0, losses = 0, totalWinR = 0, totalLossR = 0;
+  const sym = SYMBOLS.find(s => s.id === symId);
+
+  // Slide a window through the data
+  const analysisWindow = 25; // Need 25 candles for ICT analysis
+  const step = 5; // Check for signals every 5 candles
+
+  for (let i = analysisWindow; i < candles.length - lookAhead; i += step) {
+    const analysisSlice = candles.slice(i - analysisWindow, i);
+    const signal = analyzeICT(analysisSlice, symId, weights);
+
+    if (signal.bias === "NEUTRAL" || signal.score < 40 || !signal.entry || !signal.sl || !signal.tp1) continue;
+
+    // Simulate trade outcome by looking ahead (NO OPTIMIZATION on this — pure forward test)
+    const entry = signal.entry;
+    const sl = signal.sl;
+    const tp1 = signal.tp1;
+    const riskSize = Math.abs(entry - sl);
+    if (riskSize === 0) continue;
+
+    let outcome = null;
+    for (let j = i; j < Math.min(i + lookAhead, candles.length); j++) {
+      const bar = candles[j];
+      if (signal.bias === "LONG") {
+        if (bar.l <= sl) { outcome = "LOSS"; break; }
+        if (bar.h >= tp1) { outcome = "WIN"; break; }
+      } else {
+        if (bar.h >= sl) { outcome = "LOSS"; break; }
+        if (bar.l <= tp1) { outcome = "WIN"; break; }
+      }
+    }
+
+    if (!outcome) continue; // Trade didn't resolve within lookAhead period
+
+    const rewardSize = Math.abs(tp1 - entry);
+    const rr = rewardSize / riskSize;
+
+    if (outcome === "WIN") {
+      wins++;
+      totalWinR += rr;
+      trades.push({ bias: signal.bias, score: signal.score, rr: +rr.toFixed(2), result: "WIN", pips: calcPips(symId, rewardSize) });
+    } else {
+      losses++;
+      totalLossR += 1; // Loss is always 1R by definition
+      trades.push({ bias: signal.bias, score: signal.score, rr: -1, result: "LOSS", pips: -calcPips(symId, riskSize) });
+    }
+  }
+
+  const totalTrades = wins + losses;
+  return {
+    trades,
+    wins,
+    losses,
+    totalTrades,
+    winRate: totalTrades > 0 ? +((wins / totalTrades) * 100).toFixed(1) : 0,
+    avgWinR: wins > 0 ? +(totalWinR / wins).toFixed(2) : 0,
+    avgLossR: losses > 0 ? +(totalLossR / losses).toFixed(2) : 0,
+    totalWinR: +totalWinR.toFixed(2),
+    totalLossR: +totalLossR.toFixed(2),
+    totalReturn: +(totalWinR - totalLossR).toFixed(2),
+    profitFactor: totalLossR > 0 ? +(totalWinR / totalLossR).toFixed(2) : totalWinR > 0 ? 999 : 0,
+    expectancy: totalTrades > 0 ? +((totalWinR - totalLossR) / totalTrades).toFixed(3) : 0,
+  };
 };
 
 // ─── DATA FETCHER ────────────────────────────────────────────────
@@ -1114,130 +1336,175 @@ const KnowledgeTab = () => {
 
 // ─── BACKTEST TAB ────────────────────────────────────────────────
 const BacktestTab = ({ weights, setWeights, workerUrl }) => {
-  const [results, setResults] = useState(() => LS.get("backtest", []));
+  const [wfo, setWfo] = useState(null);
   const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState("");
   const [capital, setCapital] = useState(100000);
-  const [wfResults, setWfResults] = useState(null);
-  const [dateRange, setDateRange] = useState("");
+  const [period, setPeriod] = useState("2y");
+  const [selectedSym, setSelectedSym] = useState("XAUUSD");
+  const [dataStatus, setDataStatus] = useState({});
 
-  const runBacktest = async () => {
+  const runWFO = async () => {
     setRunning(true);
-    const startTime = Date.now();
-    const allResults = [];
-    const strats = ICT_KB.strategies;
+    setProgress("Downloading historical data...");
 
-    for (const sym of SYMBOLS) {
-      const candles = await fetchCandles(sym.id, "15m", workerUrl);
-      if (candles.length < 50) continue;
+    // Step 1: Fetch real long-range historical OHLCV data
+    const sym = SYMBOLS.find(s => s.id === selectedSym);
+    setProgress(`Fetching ${period} of daily ${sym.name} data from Yahoo Finance (${sym.yf})...`);
+    const historicalData = await fetchHistoricalData(selectedSym, workerUrl, period, "1d");
 
-      // Walk-forward validation
-      const wf = walkForwardEngine(candles, weights, sym.id, 80, 15);
-      if (wf.results.length) setWfResults(wf);
-
-      // Generate backtest trades
-      for (let i = 0; i < 30; i++) {
-        const startIdx = Math.floor(Math.random() * (candles.length - 30));
-        const slice = candles.slice(startIdx, startIdx + 25);
-        const analysis = analyzeICT(slice, sym.id, weights);
-        if (analysis.bias === "NEUTRAL" || analysis.score < 30) continue;
-
-        const strat = strats[Math.floor(Math.random() * strats.length)];
-        const winProb = analysis.score > 65 ? 0.72 : analysis.score > 50 ? 0.58 : 0.42;
-        const isWin = Math.random() < winProb;
-        const rr = isWin ? 1.5 + Math.random() * 1.5 : 1;
-        const riskAmt = capital * 0.01;
-        const pnlINR = Math.round(riskAmt * rr * (isWin ? 1 : -1));
-        const slPips = analysis.sl && analysis.entry ? calcPips(sym.id, Math.abs(analysis.entry - analysis.sl)) : 50;
-        const pnlPips = Math.round(slPips * rr * (isWin ? 1 : -1));
-
-        allResults.push({
-          id: Date.now() + i + Math.random(),
-          date: new Date(Date.now() - (30 - i) * 86400000).toISOString().split("T")[0],
-          symbol: sym.id, strategy: strat.name, entryTF: strat.tf, biasTF: "4H",
-          score: analysis.score, bias: analysis.bias,
-          result: isWin ? "WIN" : "LOSS", rr: rr.toFixed(2),
-          pnlINR, pnlPips,
-          capitalUsed: capital,
-        });
-      }
+    if (historicalData.length < 100) {
+      setProgress(`Only ${historicalData.length} candles received. Need 100+ for WFO. Try a longer period or check your Worker URL.`);
+      setDataStatus(prev => ({ ...prev, [selectedSym]: { candles: historicalData.length, status: "insufficient" } }));
+      setRunning(false);
+      return;
     }
 
-    const range = allResults.length ? `${allResults[0]?.date} to ${allResults[allResults.length - 1]?.date}` : "";
-    setDateRange(range);
-    setResults(allResults);
-    LS.set("backtest", allResults);
+    setDataStatus(prev => ({ ...prev, [selectedSym]: { candles: historicalData.length, status: "loaded" } }));
+    setProgress(`${historicalData.length} candles loaded. Running Walk-Forward Optimization (${Math.min(6, Math.floor(historicalData.length / 50))} rolling windows)...`);
 
-    // Auto-update weights from walk-forward
-    if (wfResults?.optimizedWeights) {
-      setWeights(wfResults.optimizedWeights);
-      LS.set("weights", wfResults.optimizedWeights);
+    // Step 2: Run proper Walk-Forward Optimization
+    // Use setTimeout to not block UI
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const numRuns = Math.min(8, Math.floor(historicalData.length / 50));
+    const wfResult = walkForwardEngine(historicalData, weights, selectedSym, {
+      inSampleRatio: 0.7,
+      numRuns,
+      minTradesPerWindow: 2,
+    });
+
+    setWfo(wfResult);
+    LS.set("wfo_" + selectedSym, { summary: wfResult.summary, dataInfo: wfResult.dataInfo, runsCount: wfResult.runs.length, timestamp: Date.now() });
+
+    // Step 3: Auto-apply optimized weights if strategy is robust
+    if (wfResult.summary.isRobust) {
+      setWeights(wfResult.optimizedWeights);
+      LS.set("weights", wfResult.optimizedWeights);
+      setProgress(`WFO complete — Strategy is ROBUST. ${wfResult.summary.totalTrades} trades across ${wfResult.runs.length} runs. Brain weights auto-optimized.`);
+    } else {
+      setProgress(`WFO complete — Strategy needs improvement. ${wfResult.summary.totalTrades} trades, WR: ${wfResult.summary.avgWR}%, WF Efficiency: ${wfResult.summary.wfEfficiency}%. Weights NOT updated.`);
     }
 
     setRunning(false);
   };
 
-  const wins = results.filter(r => r.result === "WIN").length;
-  const totalPnl = results.reduce((s, r) => s + (r.pnlINR || 0), 0);
-  const returnPct = capital > 0 ? ((totalPnl / capital) * 100).toFixed(2) : 0;
-  const avgRR = results.length ? (results.reduce((s, r) => s + parseFloat(r.rr), 0) / results.length).toFixed(2) : 0;
-  const wr = results.length ? ((wins / results.length) * 100).toFixed(1) : 0;
+  const s = wfo?.summary;
+  const riskPerTrade = capital * 0.01;
+  const totalReturnINR = s ? Math.round(s.totalReturn * riskPerTrade) : 0;
+  const returnPct = capital > 0 && s ? ((totalReturnINR / capital) * 100).toFixed(2) : 0;
 
   return (
     <div className="anim">
       <div className="card">
         <div className="ch">
-          <div className="ct">📊 Backtest Engine + Walk-Forward Validation</div>
-          <button className="btn btn-g" onClick={runBacktest} disabled={running}>{running ? <><span className="sp" /> Running...</> : "▶ Run Backtest"}</button>
+          <div className="ct">📊 Walk-Forward Optimization Engine</div>
+          <span className="tag tgo">Pardo Method (1992)</span>
         </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <div className="inp" style={{ maxWidth: 200, display: "flex", alignItems: "center", gap: 6 }}>
-            <label className="lbl" style={{ margin: 0, whiteSpace: "nowrap" }}>Capital ₹</label>
-            <input className="inp" type="number" value={capital} onChange={e => setCapital(+e.target.value)} style={{ border: "none", padding: 0, background: "transparent" }} />
+        <div style={{ fontSize: 12, color: "var(--tx-2)", marginBottom: 12, lineHeight: 1.6 }}>
+          Real Walk-Forward: Downloads historical OHLCV data → Splits into 70/30 in-sample/out-of-sample windows → Optimizes ICT weights on training data → Validates on unseen data → Rolls forward → Compiles out-of-sample performance.
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <div><label className="lbl">Symbol</label><select className="inp" style={{ width: 130 }} value={selectedSym} onChange={e => setSelectedSym(e.target.value)}>{SYMBOLS.map(s => <option key={s.id} value={s.id}>{s.icon} {s.id}</option>)}</select></div>
+          <div><label className="lbl">Data Period</label><select className="inp" style={{ width: 100 }} value={period} onChange={e => setPeriod(e.target.value)}><option value="1y">1 Year</option><option value="2y">2 Years</option><option value="5y">5 Years</option><option value="10y">10 Years</option><option value="max">Max (20yr+)</option></select></div>
+          <div><label className="lbl">Capital ₹</label><input className="inp" type="number" style={{ width: 130 }} value={capital} onChange={e => setCapital(+e.target.value)} /></div>
+          <div style={{ display: "flex", alignItems: "flex-end" }}><button className="btn btn-g" onClick={runWFO} disabled={running || !workerUrl}>{running ? <><span className="sp" /> Running WFO...</> : "▶ Run Walk-Forward"}</button></div>
+        </div>
+
+        {progress && <div style={{ fontSize: 11, color: "var(--gold)", padding: "8px 12px", background: "var(--gold-bg)", borderRadius: "var(--rs)", marginBottom: 12 }}>{progress}</div>}
+
+        {/* Data status */}
+        {Object.keys(dataStatus).length > 0 && (
+          <div style={{ fontSize: 10, color: "var(--tx-3)", marginBottom: 8 }}>
+            Data loaded: {Object.entries(dataStatus).map(([sym, d]) => `${sym}: ${d.candles} candles (${d.status})`).join(" | ")}
           </div>
-        </div>
-        {results.length > 0 && (
-          <>
-            {dateRange && <div style={{ fontSize: 10, color: "var(--tx-3)", marginBottom: 8 }}>Data range: {dateRange} | Capital: {fmtINR(capital)}</div>}
-            <div className="g4" style={{ marginBottom: 14 }}>
-              <div className="stat"><div className="stat-v" style={{ color: "var(--gold)" }}>{results.length}</div><div className="stat-l">Trades</div></div>
-              <div className="stat"><div className="stat-v" style={{ color: parseFloat(wr) >= 55 ? "var(--green)" : "var(--red)" }}>{wr}%</div><div className="stat-l">Win Rate</div></div>
-              <div className="stat"><div className="stat-v" style={{ color: totalPnl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtINR(totalPnl)}</div><div className="stat-l">Total P&L</div></div>
-              <div className="stat"><div className="stat-v" style={{ color: returnPct >= 0 ? "var(--green)" : "var(--red)" }}>{returnPct}%</div><div className="stat-l">Return</div></div>
-              <div className="stat"><div className="stat-v" style={{ color: "var(--blue)" }}>{avgRR}R</div><div className="stat-l">Avg R:R</div></div>
-              <div className="stat"><div className="stat-v tg" style={{ background: "transparent" }}>{wins}W / {results.length - wins}L</div><div className="stat-l">Record</div></div>
-            </div>
-            {wfResults && (
-              <div className="card" style={{ background: "var(--bg-2)", marginBottom: 12 }}>
-                <div className="ch"><div className="ct">🔄 Walk-Forward Results</div></div>
-                <div className="g4">
-                  <div className="stat"><div className="stat-v">{wfResults.results.length}</div><div className="stat-l">Periods</div></div>
-                  <div className="stat"><div className="stat-v" style={{ color: parseFloat(wfResults.avgWR) >= 55 ? "var(--green)" : "var(--red)" }}>{wfResults.avgWR}%</div><div className="stat-l">Avg WR</div></div>
-                  <div className="stat"><div className="stat-v" style={{ color: "var(--blue)" }}>{wfResults.avgPF}</div><div className="stat-l">Avg PF</div></div>
-                </div>
-                <div style={{ fontSize: 10, color: "var(--tx-3)", marginTop: 8 }}>Brain weights auto-optimized from walk-forward analysis. Weights that contributed to losing periods reduced, winning weights increased.</div>
+        )}
+      </div>
+
+      {/* WFO Results */}
+      {wfo && s && (
+        <>
+          <div className="card" style={{ borderLeft: `3px solid ${s.isRobust ? "var(--green)" : "var(--red)"}` }}>
+            <div className="ch">
+              <div className="ct">
+                {s.isRobust ? "✅" : "⚠️"} WFO Verdict: {s.isRobust ? "ROBUST — Ready for live trading" : "NOT ROBUST — Needs more data or weight tuning"}
               </div>
-            )}
+              <span className={`tag ${s.isRobust ? "tg" : "tr"}`}>{s.isRobust ? "PASS" : "FAIL"}</span>
+            </div>
+            <div style={{ fontSize: 10, color: "var(--tx-3)", marginBottom: 10 }}>
+              Data: {wfo.dataInfo.period} | {wfo.dataInfo.totalCandles} candles | {wfo.dataInfo.runsCompleted} WF runs | Capital: {fmtINR(capital)} | Risk: 1% per trade
+            </div>
+            <div style={{ fontSize: 10, color: "var(--tx-3)", marginBottom: 10 }}>
+              Robustness criteria (Pardo): Overall profitable ✓/{s.totalReturn > 0 ? "✅" : "❌"} | WF Efficiency ≥ 50% ✓/{parseFloat(s.wfEfficiency) >= 50 ? "✅" : "❌"} ({s.wfEfficiency}%) | Max DD &lt; 40% ✓/{s.maxDD < 40 ? "✅" : "❌"} ({s.maxDD}%)
+            </div>
+            <div className="g4" style={{ marginBottom: 14 }}>
+              <div className="stat"><div className="stat-v" style={{ color: "var(--gold)" }}>{s.totalTrades}</div><div className="stat-l">OOS Trades</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: parseFloat(s.avgWR) >= 55 ? "var(--green)" : "var(--red)" }}>{s.avgWR}%</div><div className="stat-l">OOS Win Rate</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: "var(--blue)" }}>{s.avgPF}</div><div className="stat-l">Profit Factor</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: "var(--purple)" }}>{s.wfEfficiency}%</div><div className="stat-l">WF Efficiency</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: totalReturnINR >= 0 ? "var(--green)" : "var(--red)" }}>{fmtINR(totalReturnINR)}</div><div className="stat-l">Est. Return (₹)</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: returnPct >= 0 ? "var(--green)" : "var(--red)" }}>{returnPct}%</div><div className="stat-l">Return %</div></div>
+              <div className="stat"><div className="stat-v" style={{ color: "var(--red)" }}>{s.maxDD}%</div><div className="stat-l">Max Drawdown</div></div>
+              <div className="stat"><div className="stat-v">{s.profitableRuns}/{s.totalRuns}</div><div className="stat-l">Profitable Runs</div></div>
+            </div>
+          </div>
+
+          {/* Per-Run Results */}
+          <div className="card">
+            <div className="ch"><div className="ct">🔄 Walk-Forward Runs (In-Sample → Out-of-Sample)</div></div>
             <div className="tw">
               <table className="dt">
-                <thead><tr><th>Date</th><th>Symbol</th><th>Strategy</th><th>Bias TF</th><th>Entry TF</th><th>Score</th><th>Bias</th><th>Result</th><th>R:R</th><th>Pips</th><th>P&L (₹)</th></tr></thead>
+                <thead><tr><th>Run</th><th>IS Size</th><th>IS WR%</th><th>IS PF</th><th>OOS Size</th><th>OOS Trades</th><th>OOS WR%</th><th>OOS PF</th><th>OOS Return(R)</th><th>WF Eff%</th></tr></thead>
                 <tbody>
-                  {results.slice(-25).reverse().map(r => (
-                    <tr key={r.id}>
-                      <td>{r.date}</td><td style={{ fontWeight: 600 }}>{r.symbol}</td><td>{r.strategy}</td><td>{r.biasTF}</td><td>{r.entryTF}</td>
-                      <td><span className={`tag ${r.score >= 60 ? "tg" : r.score >= 45 ? "tgo" : "tr"}`}>{r.score}</span></td>
-                      <td className={r.bias === "LONG" ? "tg" : "tr"}>{r.bias}</td>
-                      <td><span className={`tag ${r.result === "WIN" ? "tg" : "tr"}`}>{r.result}</span></td>
-                      <td>{r.rr}R</td><td className={r.pnlPips >= 0 ? "" : ""} style={{ color: r.pnlPips >= 0 ? "var(--green)" : "var(--red)" }}>{r.pnlPips > 0 ? "+" : ""}{r.pnlPips}</td>
-                      <td style={{ color: r.pnlINR >= 0 ? "var(--green)" : "var(--red)" }}>{fmtINR(r.pnlINR)}</td>
+                  {wfo.runs.map(r => (
+                    <tr key={r.run}>
+                      <td>#{r.run}</td>
+                      <td>{r.inSample.size} bars</td>
+                      <td style={{ color: r.inSample.winRate >= 55 ? "var(--green)" : "var(--red)" }}>{r.inSample.winRate}%</td>
+                      <td>{r.inSample.profitFactor}</td>
+                      <td>{r.outOfSample.size} bars</td>
+                      <td>{r.outOfSample.totalTrades}</td>
+                      <td style={{ color: r.outOfSample.winRate >= 55 ? "var(--green)" : "var(--red)" }}>{r.outOfSample.winRate}%</td>
+                      <td style={{ color: r.outOfSample.profitFactor >= 1 ? "var(--green)" : "var(--red)" }}>{r.outOfSample.profitFactor}</td>
+                      <td style={{ color: r.outOfSample.totalReturn >= 0 ? "var(--green)" : "var(--red)" }}>{r.outOfSample.totalReturn > 0 ? "+" : ""}{r.outOfSample.totalReturn}R</td>
+                      <td style={{ color: parseFloat(r.wfEfficiency) >= 50 ? "var(--green)" : "var(--red)" }}>{r.wfEfficiency}%</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </>
-        )}
-        {results.length === 0 && <div className="empty"><div className="empty-i">📊</div><p>Run backtest to simulate trades. Walk-forward engine validates and auto-optimizes brain weights.</p></div>}
-      </div>
+            <div style={{ marginTop: 10, fontSize: 10, color: "var(--tx-3)", lineHeight: 1.5 }}>
+              <strong>How to read:</strong> IS = In-Sample (training data, 70%). OOS = Out-of-Sample (validation data, 30%, NEVER seen during optimization).
+              WF Efficiency = OOS Return / IS Return × 100. A WFE ≥ 50% means strategy retains at least half its in-sample performance on unseen data — the gold standard for robustness.
+              {s.isRobust && " ✅ Brain weights have been auto-optimized using winning OOS run parameters."}
+              {!s.isRobust && " ⚠️ Weights NOT auto-updated because strategy failed robustness check. Try more data or adjust weights manually in Brain tab."}
+            </div>
+          </div>
+
+          {/* OOS Equity Curve */}
+          {wfo.oosEquityCurve.length > 1 && (
+            <div className="card">
+              <div className="ch"><div className="ct">📈 OOS Equity Curve (R-multiples)</div></div>
+              <div style={{ display: "flex", alignItems: "flex-end", height: 120, gap: 4, padding: "0 8px" }}>
+                {wfo.oosEquityCurve.map((pt, i) => {
+                  const maxEq = Math.max(...wfo.oosEquityCurve.map(p => Math.abs(p.equity)), 1);
+                  const h = Math.abs(pt.equity) / maxEq * 100;
+                  return (
+                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                      <div style={{ fontSize: 9, color: "var(--tx-3)", marginBottom: 2 }}>{pt.equity > 0 ? "+" : ""}{pt.equity.toFixed(1)}R</div>
+                      <div style={{ width: "100%", height: `${Math.max(4, h)}%`, background: pt.equity >= 0 ? "var(--green)" : "var(--red)", borderRadius: "3px 3px 0 0", minHeight: 4 }} />
+                      <div style={{ fontSize: 8, color: "var(--tx-3)", marginTop: 2 }}>Run {pt.run}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {!wfo && <div className="card"><div className="empty"><div className="empty-i">📊</div><p>Select a symbol and data period, then run Walk-Forward Optimization. The engine downloads real historical data from Yahoo Finance and runs proper in-sample/out-of-sample validation.</p></div></div>}
     </div>
   );
 };
