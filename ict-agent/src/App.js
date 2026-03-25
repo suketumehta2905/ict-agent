@@ -32,7 +32,7 @@ const ls={get:k=>{try{const r=localStorage.getItem(k);return r?JSON.parse(r):nul
 // ── API ──────────────────────────────────────────────────────
 async function wFetch(p){try{const r=await fetch(`${WORKER}?${new URLSearchParams(p)}`);if(!r.ok)throw new Error(`HTTP ${r.status}`);return{data:await r.json(),error:null};}catch(e){return{data:null,error:e.message};}}
 async function fetchPrice(sk,tdK,fhK){const sv=SYMS[sk],src=SYM_SRC[sk];if(src==="yf"){const{data,error}=await wFetch({source:"yf",symbol:sv.fh,type:"price",apikey:"none"});if(data?.price&&!error)return{price:parseFloat(data.price),error:null};}if(tdK){const{data,error}=await wFetch({source:"td",symbol:sv.td,type:"price",apikey:tdK});if(data?.price&&!error)return{price:parseFloat(data.price),error:null};}return{price:null,error:"No key"};}
-async function fetchCandles(sk,tfK,tdK,fhK,count=300){const sv=SYMS[sk],src=SYM_SRC[sk];if(src==="yf"&&FH_RES[tfK]){const now=Math.floor(Date.now()/1000),from=now-count*tfMins(tfK)*60;const{data,error}=await wFetch({source:"fh",symbol:sv.fh,type:"candles",resolution:FH_RES[tfK],from,to:now,apikey:fhK});if(data?.values?.length&&!error)return{candles:data.values.map(v=>({t:new Date(v.datetime).getTime(),o:parseFloat(v.open),h:parseFloat(v.high),l:parseFloat(v.low),c:parseFloat(v.close),v:v.volume||0})),error:null};}if(tdK&&TD_INT[tfK]){const{data,error}=await wFetch({source:"td",symbol:sv.td,interval:TD_INT[tfK],outputsize:count,type:"candles",apikey:tdK});if(data?.values?.length&&!error)return{candles:data.values.map(v=>({t:new Date(v.datetime).getTime(),o:parseFloat(v.open),h:parseFloat(v.high),l:parseFloat(v.low),c:parseFloat(v.close),v:v.volume||0})),error:null};}return{candles:null,error:"No data"};}
+async function fetchCandles(sk,tfK,tdK,fhK,count=300){const sv=SYMS[sk],src=SYM_SRC[sk];if(src==="yf"&&FH_RES[tfK]){const now=Math.floor(Date.now()/1000),from=now-count*tfMins(tfK)*60;const{data,error}=await wFetch({source:"yf",symbol:sv.fh,type:"candles",resolution:FH_RES[tfK],from,to:now,apikey:"none"});if(data?.values?.length&&!error)return{candles:data.values.map(v=>({t:new Date(v.datetime).getTime(),o:parseFloat(v.open),h:parseFloat(v.high),l:parseFloat(v.low),c:parseFloat(v.close),v:v.volume||0})),error:null};}if(tdK&&TD_INT[tfK]){const{data,error}=await wFetch({source:"td",symbol:sv.td,interval:TD_INT[tfK],outputsize:count,type:"candles",apikey:tdK});if(data?.values?.length&&!error)return{candles:data.values.map(v=>({t:new Date(v.datetime).getTime(),o:parseFloat(v.open),h:parseFloat(v.high),l:parseFloat(v.low),c:parseFloat(v.close),v:v.volume||0})),error:null};}return{candles:null,error:"No data"};}
 async function testConn(fhK,tdK){const{data}=await wFetch({source:"yf",symbol:"XAU_USD",type:"price",apikey:"none"});if(data?.price)return{ok:true,msg:`✅ Yahoo Finance Gold: $${parseFloat(data.price).toFixed(2)}`};if(tdK){const{data:d2}=await wFetch({source:"td",symbol:"XAU%2FUSD",type:"price",apikey:tdK});if(d2?.price)return{ok:true,msg:`✅ Twelve Data Gold: $${parseFloat(d2.price).toFixed(2)}`};}return{ok:false,msg:"❌ Connection failed - check Worker deployment"};}
 // ── BRAIN / WEIGHTS ──────────────────────────────────────────
 const DW={htfBias:{weight:20,wins:0,losses:0,label:"HTF MA Bias",desc:"Price above/below MA50 directional filter"},premDisc:{weight:18,wins:0,losses:0,label:"Premium/Discount Zone",desc:"Buy in discount (<50% range), sell in premium (>50%)"},ote:{weight:22,wins:0,losses:0,label:"OTE 62–79% Fib",desc:"Optimal Trade Entry — Sovereign Setup retracement zone"},midnightBias:{weight:15,wins:0,losses:0,label:"Midnight Open Bias",desc:"Price vs 00:00 open — discount below, premium above"},bullOB:{weight:28,wins:0,losses:0,label:"Bullish Order Block",desc:"Last bearish candle before institutional upside displacement"},bearOB:{weight:28,wins:0,losses:0,label:"Bearish Order Block",desc:"Last bullish candle before institutional downside displacement"},bullFVG:{weight:20,wins:0,losses:0,label:"Bullish FVG",desc:"Bullish imbalance gap — CE (50%) is high-probability entry"},bearFVG:{weight:20,wins:0,losses:0,label:"Bearish FVG",desc:"Bearish imbalance gap — CE is high-probability entry"},liqSweepBSL:{weight:25,wins:0,losses:0,label:"BSL Sweep (Buy-Side)",desc:"Buy-side liquidity swept above equal highs — institutional sell signal"},liqSweepSSL:{weight:25,wins:0,losses:0,label:"SSL Sweep (Sell-Side)",desc:"Sell-side liquidity swept below equal lows — institutional buy signal"},bosBull:{weight:16,wins:0,losses:0,label:"Bullish BOS",desc:"Break of Structure — higher high confirms uptrend"},bosBear:{weight:16,wins:0,losses:0,label:"Bearish BOS",desc:"Break of Structure — lower low confirms downtrend"},chochBull:{weight:20,wins:0,losses:0,label:"CHoCH Bullish",desc:"Change of Character — institutional turn signal (bullish)"},chochBear:{weight:20,wins:0,losses:0,label:"CHoCH Bearish",desc:"Change of Character — institutional turn signal (bearish)"},displacement:{weight:14,wins:0,losses:0,label:"Displacement",desc:"Impulsive move >2×ATR — institutional order flow confirmed"},asianBreak:{weight:12,wins:0,losses:0,label:"Asian Range Break",desc:"Break of Asian session range — directional bias signal"},judas:{weight:18,wins:0,losses:0,label:"Judas Swing",desc:"False move at London open to sweep liquidity before reversal"},amd:{weight:15,wins:0,losses:0,label:"AMD Phase",desc:"Accumulation→Manipulation→Distribution cycle alignment"}};
@@ -399,245 +399,218 @@ function SettingsModal({onClose,onSave,times}){
 // ═══════════════════════════════════════════════════════════════
 //  PROFESSIONAL CHART COMPONENT
 // ═══════════════════════════════════════════════════════════════
-function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS}){
-  const[chartH,setChartH]=useState(460);
-  const[showFVG,setShowFVG]=useState(true);const[showOB,setShowOB]=useState(true);
-  const[showFib,setShowFib]=useState(false);const[showLiq,setShowLiq]=useState(true);
-  const[showStr,setShowStr]=useState(true);const[showMA,setShowMA]=useState(true);
-  const[showAsian,setShowAsian]=useState(true);const[nCandles,setNCandles]=useState(60);
-  const isDrag=useRef(false);const dragY=useRef(0);const dragH0=useRef(0);
-  const recent=useMemo(()=>data?data.slice(-nCandles):[],[data,nCandles]);
+function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onToggleFS,sym,onRefresh}){
+  const containerRef=useRef(null);
+  const chartRef=useRef(null);
+  const seriesRef=useRef(null);
+  const[showFVG,setShowFVG]=useState(true);
+  const[showOB,setShowOB]=useState(true);
+  const[showLiq,setShowLiq]=useState(true);
+  const[showStr,setShowStr]=useState(true);
+  const[showMA,setShowMA]=useState(true);
+  const[showAsian,setShowAsian]=useState(true);
+  const[showFib,setShowFib]=useState(false);
+  const[chartReady,setChartReady]=useState(false);
+  const linesRef=useRef([]);
+  const markersRef=useRef([]);
+
+  // ── LOAD LIGHTWEIGHT CHARTS ─────────────────────────────────
   useEffect(()=>{
-    const onMove=e=>{if(!isDrag.current)return;setChartH(Math.max(280,dragH0.current+(e.clientY-dragY.current)));};
-    const onUp=()=>{isDrag.current=false;};
-    document.addEventListener("mousemove",onMove);document.addEventListener("mouseup",onUp);
-    return()=>{document.removeEventListener("mousemove",onMove);document.removeEventListener("mouseup",onUp);};
+    if(window.LightweightCharts){setChartReady(true);return;}
+    const script=document.createElement('script');
+    script.src='https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js';
+    script.onload=()=>setChartReady(true);
+    document.head.appendChild(script);
   },[]);
-  const effH=fullscreen?window.innerHeight-50:chartH;
-  if(!data?.length)return(
-    <div style={{height:`${effH}px`,display:"flex",alignItems:"center",justifyContent:"center",background:"#0D1117",borderRadius:"8px",border:"1px solid #21262D",color:"#8B949E",flexDirection:"column",gap:"8px"}}>
-      <div style={{fontSize:"32px"}}>📊</div><div style={{fontSize:"14px"}}>Loading {tfLabel}...</div>
-    </div>);
-  const maxP=Math.max(...recent.map(c=>c.h)),minP=Math.min(...recent.map(c=>c.l)),range=maxP-minP||1;
-  // Full width SVG — no fixed W, use 100% viewBox with dynamic calculation
-  const W=1200,pL=70,pR=72,pT=12,pB=52;
-  const cH=effH-110;// chart body height
-  const cW=W-pL-pR;
-  const cw=Math.max(cW/recent.length-0.8,2);
-  const py=v=>pT+cH-((v-minP)/range)*cH;
-  const px=i=>pL+i*(cW/recent.length)+cw/2;
-  const priceGrid=Array.from({length:7},(_,i)=>minP+(range/6)*i);
-  // Color theme — TradingView dark
-  const BG="#0D1117",GRID="#161B22",TEXT="#8B949E",BULL="#26A69A",BEAR="#EF5350";
+
+  // ── CREATE CHART ────────────────────────────────────────────
+  useEffect(()=>{
+    if(!chartReady||!containerRef.current)return;
+    const LC=window.LightweightCharts;
+    if(!LC)return;
+
+    // Destroy old chart
+    if(chartRef.current){try{chartRef.current.remove();}catch(e){}}
+    linesRef.current=[];
+
+    const chart=LC.createChart(containerRef.current,{
+      layout:{background:{color:'#0D1117'},textColor:'#C9D1D9'},
+      grid:{vertLines:{color:'#161B22'},horzLines:{color:'#161B22'}},
+      crosshair:{mode:LC.CrosshairMode.Normal},
+      rightPriceScale:{borderColor:'#30363D',textColor:'#8B949E'},
+      timeScale:{borderColor:'#30363D',timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:8},
+      width:containerRef.current.clientWidth,
+      height:fullscreen?window.innerHeight-80:460,
+    });
+
+    // Candlestick series
+    const series=chart.addCandlestickSeries({
+      upColor:'#26A69A',downColor:'#EF5350',
+      borderUpColor:'#26A69A',borderDownColor:'#EF5350',
+      wickUpColor:'#26A69A',wickDownColor:'#EF5350',
+    });
+    seriesRef.current=series;
+    chartRef.current=chart;
+
+    // Resize observer
+    const ro=new ResizeObserver(()=>{
+      if(containerRef.current&&chartRef.current)
+        chartRef.current.applyOptions({width:containerRef.current.clientWidth});
+    });
+    ro.observe(containerRef.current);
+
+    return()=>{ro.disconnect();try{chart.remove();}catch(e){}};
+  },[chartReady,fullscreen]);
+
+  // ── FEED DATA ───────────────────────────────────────────────
+  useEffect(()=>{
+    if(!seriesRef.current||!data?.length)return;
+    const sorted=[...data].sort((a,b)=>a.t-b.t);
+    const lc=sorted.map(c=>({time:Math.floor(c.t/1000),open:c.o,high:c.h,low:c.l,close:c.c}));
+    try{
+      seriesRef.current.setData(lc);
+      chartRef.current?.timeScale().fitContent();
+    }catch(e){}
+  },[data]);
+
+  // ── OVERLAY ICT LEVELS ──────────────────────────────────────
+  useEffect(()=>{
+    if(!chartRef.current||!seriesRef.current||!data?.length)return;
+    const chart=chartRef.current;
+    const LC=window.LightweightCharts;
+    if(!LC)return;
+
+    // Clear old lines
+    linesRef.current.forEach(l=>{try{chart.removePriceLine(l);}catch(e){}});
+    linesRef.current=[];
+
+    const addLine=(price,color,title,dash=true)=>{
+      if(!price||price<=0)return;
+      try{
+        const l=seriesRef.current.createPriceLine({
+          price,color,lineWidth:1,
+          lineStyle:dash?LC.LineStyle.Dashed:LC.LineStyle.Solid,
+          axisLabelVisible:true,title
+        });
+        linesRef.current.push(l);
+      }catch(e){}
+    };
+
+    // Signal levels
+    if(analysis){
+      addLine(analysis.entry,'#3B82F6','ENTRY',false);
+      addLine(analysis.sl,'#EF5350','SL',false);
+      addLine(analysis.tp1,'#26A69A','TP1',false);
+      addLine(analysis.tp2,'#059669','TP2',true);
+    }
+    // Liquidity
+    if(showLiq&&analysis?.liq){
+      addLine(analysis.liq.BSL,'#EF535088','BSL');
+      addLine(analysis.liq.SSL,'#26A69A88','SSL');
+    }
+    // Asian range
+    if(showAsian&&analysis?.asian?.hi>0){
+      addLine(analysis.asian.hi,'#7C3AED88','Asia Hi');
+      addLine(analysis.asian.lo,'#7C3AED88','Asia Lo');
+    }
+    // Equilibrium
+    if(analysis?.pd?.eq>0){
+      addLine(analysis.pd.eq,'#47556944','EQ');
+    }
+    // MA lines
+    if(showMA&&analysis?.htf){
+      if(analysis.htf.ma20>0)addLine(analysis.htf.ma20,'#F59E0B88','MA20');
+      if(analysis.htf.ma50>0)addLine(analysis.htf.ma50,'#6366F188','MA50');
+    }
+    // Fibonacci
+    if(showFib&&analysis?.pd){
+      addLine(analysis.pd.fib618,'#A78BFA66','61.8%');
+      addLine(analysis.pd.fib705,'#A78BFA88','70.5% OTE');
+      addLine(analysis.pd.fib786,'#A78BFA66','78.6%');
+      addLine(analysis.pd.fib382,'#F59E0B55','38.2%');
+    }
+    // FVG mid lines
+    if(showFVG&&analysis?.fvgs){
+      analysis.fvgs.filter(f=>!f.filled).slice(-4).forEach(f=>{
+        addLine(f.ce,f.type==='bullish'?'#26A69A66':'#EF535066',`FVG CE`);
+      });
+    }
+    // OB mid lines
+    if(showOB&&analysis?.obs){
+      analysis.obs.slice(-4).forEach(ob=>{
+        addLine(ob.ce,ob.type==='bullish'?'#3B82F666':'#EF535066',`OB 50%`);
+      });
+    }
+  },[analysis,showFVG,showOB,showLiq,showStr,showMA,showAsian,showFib,data]);
+
+  // ── MARKERS (BOS/CHoCH) ─────────────────────────────────────
+  useEffect(()=>{
+    if(!seriesRef.current||!analysis?.structs?.length||!showStr)return;
+    try{
+      const sorted=[...data||[]].sort((a,b)=>a.t-b.t);
+      const markers=analysis.structs.slice(-8).map(s=>{
+        const c=sorted[s.idx]||sorted[sorted.length-1];
+        return{
+          time:Math.floor(c.t/1000),
+          position:s.dir==='bullish'?'belowBar':'aboveBar',
+          color:s.type==='BOS'?'#3B82F6':'#F59E0B',
+          shape:s.dir==='bullish'?'arrowUp':'arrowDown',
+          text:s.type,size:1
+        };
+      }).filter(m=>m.time>0);
+      if(markers.length)seriesRef.current.setMarkers(markers.sort((a,b)=>a.time-b.time));
+    }catch(e){}
+  },[analysis,showStr,data]);
+
+  const effH=fullscreen?window.innerHeight-80:460;
+
   return(
-    <div style={{background:BG,borderRadius:"8px",border:"1px solid #21262D",overflow:"hidden",
-      position:fullscreen?"fixed":"relative",inset:fullscreen?0:undefined,zIndex:fullscreen?1000:undefined,
-      width:"100%",boxSizing:"border-box"}}>
-      {/* Toolbar — TradingView style */}
-      <div style={{padding:"6px 12px",borderBottom:"1px solid #21262D",display:"flex",alignItems:"center",gap:"6px",background:"#161B22",flexWrap:"wrap"}}>
+    <div style={{background:"#0D1117",borderRadius:"8px",border:"1px solid #21262D",overflow:"hidden",position:fullscreen?"fixed":"relative",inset:fullscreen?0:undefined,zIndex:fullscreen?1000:undefined,width:"100%",boxSizing:"border-box"}}>
+      {/* Toolbar */}
+      <div style={{padding:"6px 10px",borderBottom:"1px solid #21262D",display:"flex",alignItems:"center",gap:"4px",background:"#161B22",flexWrap:"wrap"}}>
         {/* TF buttons */}
-        <div style={{display:"flex",gap:"2px"}}>
-          {(allTFs||["1m","5m","15m","30m","1H","4H","1D"]).map(tf=>(
-            <button key={tf} onClick={()=>onTFChange(tf)}
-              style={{padding:"3px 9px",borderRadius:"4px",border:"none",
-                background:chartTF===tf?"#1D4ED8":"transparent",
-                color:chartTF===tf?"white":"#8B949E",
-                fontSize:"12px",fontWeight:chartTF===tf?"700":"400",cursor:"pointer",fontFamily:"monospace"}}>
-              {tf}
-            </button>))}
-        </div>
-        <div style={{width:"1px",height:"18px",background:"#21262D",margin:"0 4px"}}/>
-        {/* Candle count */}
-        <select value={nCandles} onChange={e=>setNCandles(Number(e.target.value))}
-          style={{background:"#21262D",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 7px",fontSize:"12px",color:"#C9D1D9",cursor:"pointer",outline:"none"}}>
-          {[20,30,50,60,80,100,150,200].map(n=><option key={n} value={n}>{n}</option>)}
-        </select>
-        <div style={{width:"1px",height:"18px",background:"#21262D",margin:"0 4px"}}/>
+        {(allTFs||["1m","5m","15m","30m","1H","4H","1D"]).map(tf=>(
+          <button key={tf} onClick={()=>onTFChange(tf)} style={{padding:"3px 9px",borderRadius:"4px",border:"none",background:chartTF===tf?"#1D4ED8":"transparent",color:chartTF===tf?"white":"#8B949E",fontSize:"12px",fontWeight:chartTF===tf?"700":"400",cursor:"pointer",fontFamily:"monospace"}}>
+            {tf}
+          </button>))}
+        <div style={{width:"1px",height:"18px",background:"#21262D",margin:"0 3px"}}/>
         {/* Layer toggles */}
-        {[["FVG","#26A69A",showFVG,setShowFVG],["OB","#3B82F6",showOB,setShowOB],["LIQ","#EF5350",showLiq,setShowLiq],
-          ["STR","#A78BFA",showStr,setShowStr],["MA","#F59E0B",showMA,setShowMA],
-          ["FIB","#D97706",showFib,setShowFib],["ASIAN","#7C3AED",showAsian,setShowAsian]].map(([lbl,color,val,setter])=>(
-          <button key={lbl} onClick={()=>setter(!val)}
-            style={{padding:"2px 8px",borderRadius:"3px",border:`1px solid ${val?color:"#30363D"}`,
-              background:val?`${color}20`:"transparent",color:val?color:"#484F58",
-              fontSize:"11px",fontWeight:"600",cursor:"pointer"}}>
+        {[["FVG","#26A69A",showFVG,setShowFVG],["OB","#3B82F6",showOB,setShowOB],["LIQ","#EF5350",showLiq,setShowLiq],["STR","#A78BFA",showStr,setShowStr],["MA","#F59E0B",showMA,setShowMA],["FIB","#D97706",showFib,setShowFib],["ASIAN","#7C3AED",showAsian,setShowAsian]].map(([lbl,color,val,setter])=>(
+          <button key={lbl} onClick={()=>setter(!val)} style={{padding:"2px 7px",borderRadius:"3px",border:`1px solid ${val?color:"#30363D"}`,background:val?`${color}22`:"transparent",color:val?color:"#484F58",fontSize:"11px",fontWeight:"600",cursor:"pointer"}}>
             {lbl}
           </button>))}
-        {/* Signal badges */}
-        {analysis&&<div style={{marginLeft:"auto",display:"flex",gap:"8px",alignItems:"center"}}>
-          <span style={{background:analysis.dir==="LONG"?"rgba(38,166,154,0.2)":"rgba(239,83,80,0.2)",
-            color:analysis.dir==="LONG"?"#26A69A":"#EF5350",padding:"2px 10px",borderRadius:"3px",fontSize:"12px",fontWeight:"700",border:`1px solid ${analysis.dir==="LONG"?"#26A69A":"#EF5350"}33`}}>
+        {/* Signal info */}
+        {analysis&&<div style={{marginLeft:"auto",display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{background:analysis.dir==="LONG"?"rgba(38,166,154,0.15)":"rgba(239,83,80,0.15)",color:analysis.dir==="LONG"?"#26A69A":"#EF5350",padding:"2px 10px",borderRadius:"3px",fontSize:"12px",fontWeight:"700",border:`1px solid ${analysis.dir==="LONG"?"#26A69A33":"#EF535033"}`}}>
             {analysis.dir==="LONG"?"▲ LONG":"▼ SHORT"} {analysis.conf}%
           </span>
-          {[{k:"entry",c:"#3B82F6"},{k:"sl",c:"#EF5350"},{k:"tp1",c:"#26A69A"}].map(x=>(
-            <span key={x.k} style={{color:x.c,fontSize:"11px",fontFamily:"monospace"}}>{x.k.toUpperCase()}:{analysis[x.k]}</span>))}
+          <span style={{color:"#3B82F6",fontSize:"11px",fontFamily:"monospace"}}>E:{analysis.entry}</span>
+          <span style={{color:"#EF5350",fontSize:"11px",fontFamily:"monospace"}}>SL:{analysis.sl}</span>
+          <span style={{color:"#26A69A",fontSize:"11px",fontFamily:"monospace"}}>TP:{analysis.tp1}</span>
         </div>}
-        <button onClick={onToggleFS}
-          style={{background:"transparent",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer",color:"#8B949E",marginLeft:analysis?"0":"auto"}}>
+        <button onClick={onRefresh} title="Refresh chart data" style={{background:"transparent",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer",color:"#8B949E",marginLeft:analysis?"0":"auto"}}>↺</button>
+        <button onClick={onToggleFS} style={{background:"transparent",border:"1px solid #30363D",borderRadius:"4px",padding:"3px 8px",fontSize:"12px",cursor:"pointer",color:"#8B949E"}}>
           {fullscreen?"⊠":"⊞"}
         </button>
       </div>
 
-      {/* Chart SVG — stretches full width */}
-      <div style={{width:"100%",height:`${effH-42}px`,overflow:"hidden",background:BG}}>
-        <svg width="100%" height="100%" viewBox={`0 0 ${W} ${cH+pT+pB}`} preserveAspectRatio="none"
-          style={{display:"block"}}>
-          {/* Background */}
-          <rect width={W} height={cH+pT+pB} fill={BG}/>
-          {/* Grid lines */}
-          {priceGrid.map((p,i)=>(
-            <g key={i}>
-              <line x1={pL} y1={py(p)} x2={W-pR} y2={py(p)} stroke={GRID} strokeWidth="1"/>
-              <text x={pL-6} y={py(p)+4} textAnchor="end" fill={TEXT} fontSize="10" fontFamily="'Roboto Mono',monospace">
-                {p>100?p.toFixed(2):p.toFixed(3)}
-              </text>
-            </g>))}
-
-          {/* MA lines */}
-          {showMA&&analysis?.htf?.ma20>0&&(()=>{const n=Math.min(20,recent.length);const pts=recent.slice(-n).map((c,i)=>`${px(recent.length-n+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#F59E0B" strokeWidth="1.3" opacity="0.8"/>;})()} 
-          {showMA&&analysis?.htf?.ma50>0&&(()=>{const n=Math.min(50,recent.length);const pts=recent.slice(-n).map((c,i)=>`${px(recent.length-n+i)},${py(c.c)}`).join(" ");return<polyline points={pts} fill="none" stroke="#6366F1" strokeWidth="1.3" opacity="0.8"/>;})()} 
-
-          {/* FVGs with CE level */}
-          {showFVG&&analysis?.fvgs?.filter(f=>!f.filled).slice(-5).map((f,i)=>(
-            <g key={`fvg${i}`}>
-              <rect x={pL} y={py(f.top)} width={cW} height={Math.max(Math.abs(py(f.bot)-py(f.top)),1)}
-                fill={f.type==="bullish"?"rgba(38,166,154,0.12)":"rgba(239,83,80,0.12)"}
-                stroke={f.type==="bullish"?"#26A69A44":"#EF535044"} strokeWidth="1"/>
-              <line x1={pL} y1={py(f.ce)} x2={W-pR} y2={py(f.ce)}
-                stroke={f.type==="bullish"?"#26A69A":"#EF5350"} strokeWidth="0.8" strokeDasharray="3,4" opacity="0.7"/>
-              <rect x={pL+4} y={py(f.top)+2} width={28} height={12} fill={f.type==="bullish"?"#26A69A22":"#EF535022"} rx="2"/>
-              <text x={pL+18} y={py(f.top)+11} textAnchor="middle" fill={f.type==="bullish"?"#26A69A":"#EF5350"} fontSize="9" fontWeight="700">FVG</text>
-              <text x={W-pR+2} y={py(f.ce)-2} fill={f.type==="bullish"?"#26A69A":"#EF5350"} fontSize="8.5">CE</text>
-            </g>))}
-
-          {/* OBs with 50% mean threshold */}
-          {showOB&&analysis?.obs?.slice(-4).map((ob,i)=>(
-            <g key={`ob${i}`}>
-              <rect x={pL} y={py(ob.hi)} width={cW} height={Math.max(Math.abs(py(ob.lo)-py(ob.hi)),1)}
-                fill={ob.type==="bullish"?"rgba(59,130,246,0.1)":"rgba(239,83,80,0.1)"}
-                stroke={ob.type==="bullish"?"#3B82F644":"#EF535044"} strokeWidth="1"/>
-              <line x1={pL} y1={py(ob.ce)} x2={W-pR} y2={py(ob.ce)}
-                stroke={ob.type==="bullish"?"#3B82F6":"#EF5350"} strokeWidth="0.8" strokeDasharray="3,4" opacity="0.6"/>
-              <text x={W-pR+3} y={py(ob.hi)+11} fill={ob.type==="bullish"?"#3B82F6":"#EF5350"} fontSize="9" fontWeight="700">OB {ob.quality||""}</text>
-              <text x={W-pR+3} y={py(ob.ce)-2} fill={ob.type==="bullish"?"#3B82F6":"#EF5350"} fontSize="8">50%</text>
-            </g>))}
-
-          {/* Fibonacci */}
-          {showFib&&analysis?.pd&&[
-            {v:analysis.pd.fib236,l:"23.6%",c:"#4B5563"},{v:analysis.pd.fib382,l:"38.2%",c:"#F59E0B"},
-            {v:analysis.pd.eq,    l:"50% EQ",c:"#6B7280"},{v:analysis.pd.fib618,l:"61.8%",c:"#3B82F6"},
-            {v:analysis.pd.fib705,l:"70.5% OTE",c:"#A78BFA"},{v:analysis.pd.fib786,l:"78.6% OTE",c:"#A78BFA"}
-          ].map((f,i)=>(
-            <g key={`fib${i}`}>
-              <line x1={pL} y1={py(f.v)} x2={W-pR} y2={py(f.v)} stroke={f.c} strokeWidth="0.7" strokeDasharray="2,6" opacity="0.6"/>
-              <text x={pL+4} y={py(f.v)-2} fill={f.c} fontSize="8.5" fontFamily="monospace" opacity="0.8">{f.l}</text>
-            </g>))}
-
-          {/* Liquidity levels */}
-          {showLiq&&analysis?.liq&&<>
-            <line x1={pL} y1={py(analysis.liq.BSL)} x2={W-pR} y2={py(analysis.liq.BSL)} stroke="#EF5350" strokeWidth="1.2" strokeDasharray="6,3" opacity="0.8"/>
-            <rect x={W-pR+2} y={py(analysis.liq.BSL)-9} width={30} height={14} fill="#EF535033" rx="3" stroke="#EF5350" strokeWidth="0.5"/>
-            <text x={W-pR+17} y={py(analysis.liq.BSL)+2} textAnchor="middle" fill="#EF5350" fontSize="9" fontWeight="700">BSL</text>
-            <line x1={pL} y1={py(analysis.liq.SSL)} x2={W-pR} y2={py(analysis.liq.SSL)} stroke="#26A69A" strokeWidth="1.2" strokeDasharray="6,3" opacity="0.8"/>
-            <rect x={W-pR+2} y={py(analysis.liq.SSL)-9} width={30} height={14} fill="#26A69A33" rx="3" stroke="#26A69A" strokeWidth="0.5"/>
-            <text x={W-pR+17} y={py(analysis.liq.SSL)+2} textAnchor="middle" fill="#26A69A" fontSize="9" fontWeight="700">SSL</text>
-          </>}
-
-          {/* Structure BOS/CHoCH labels */}
-          {showStr&&analysis?.structs?.slice(-6).map((s,i)=>{
-            const ci=recent.length-(analysis.structs.length-i);if(ci<0||ci>=recent.length)return null;
-            const x=px(ci);
-            return(<g key={`str${i}`}>
-              <line x1={x} y1={py(s.price)-8} x2={x} y2={py(s.price)+8} stroke={s.dir==="bullish"?"#26A69A":"#EF5350"} strokeWidth="1" opacity="0.5"/>
-              <rect x={x-18} y={py(s.price)-(s.type==="BOS"?9:11)} width={36} height={14} rx="3"
-                fill={s.type==="BOS"?"#1D4ED8CC":"#F59E0BCC"}/>
-              <text x={x} y={py(s.price)-(s.type==="BOS"?0:2)} textAnchor="middle" fill="white" fontSize="8.5" fontWeight="700">{s.type}</text>
-            </g>);})}
-
-          {/* Asian range */}
-          {showAsian&&analysis?.asian?.hi>0&&<>
-            <line x1={pL} y1={py(analysis.asian.hi)} x2={W-pR} y2={py(analysis.asian.hi)} stroke="#7C3AED" strokeWidth="1" strokeDasharray="4,4" opacity="0.7"/>
-            <text x={pL+4} y={py(analysis.asian.hi)-3} fill="#7C3AED" fontSize="8.5">Asia Hi {analysis.asian.hi}</text>
-            <line x1={pL} y1={py(analysis.asian.lo)} x2={W-pR} y2={py(analysis.asian.lo)} stroke="#7C3AED" strokeWidth="1" strokeDasharray="4,4" opacity="0.7"/>
-            <text x={pL+4} y={py(analysis.asian.lo)+12} fill="#7C3AED" fontSize="8.5">Asia Lo {analysis.asian.lo}</text>
-          </>}
-
-          {/* Equilibrium */}
-          {analysis?.pd?.eq>0&&<>
-            <line x1={pL} y1={py(analysis.pd.eq)} x2={W-pR} y2={py(analysis.pd.eq)} stroke="#374151" strokeWidth="0.8" strokeDasharray="6,4"/>
-            <text x={W-pR+3} y={py(analysis.pd.eq)+4} fill="#4B5563" fontSize="8.5">EQ</text>
-          </>}
-
-          {/* Signal lines */}
-          {analysis?.entry&&<>
-            <line x1={pL} y1={py(analysis.entry)} x2={W-pR} y2={py(analysis.entry)} stroke="#3B82F6" strokeWidth="1.5" strokeDasharray="7,4"/>
-            <rect x={W-pR+2} y={py(analysis.entry)-9} width={66} height={15} fill="#1D4ED8" rx="3"/>
-            <text x={W-pR+35} y={py(analysis.entry)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">ENTRY {analysis.entry}</text>
-          </>}
-          {analysis?.sl&&<>
-            <line x1={pL} y1={py(analysis.sl)} x2={W-pR} y2={py(analysis.sl)} stroke="#EF5350" strokeWidth="1.5" strokeDasharray="5,3"/>
-            <rect x={W-pR+2} y={py(analysis.sl)-9} width={56} height={15} fill="#B91C1C" rx="3"/>
-            <text x={W-pR+30} y={py(analysis.sl)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">SL {analysis.sl}</text>
-          </>}
-          {analysis?.tp1&&<>
-            <line x1={pL} y1={py(analysis.tp1)} x2={W-pR} y2={py(analysis.tp1)} stroke="#26A69A" strokeWidth="1.5" strokeDasharray="5,3"/>
-            <rect x={W-pR+2} y={py(analysis.tp1)-9} width={56} height={15} fill="#0F766E" rx="3"/>
-            <text x={W-pR+30} y={py(analysis.tp1)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP1 {analysis.tp1}</text>
-          </>}
-          {analysis?.tp2&&<>
-            <line x1={pL} y1={py(analysis.tp2)} x2={W-pR} y2={py(analysis.tp2)} stroke="#059669" strokeWidth="1.2" strokeDasharray="4,5"/>
-            <rect x={W-pR+2} y={py(analysis.tp2)-9} width={56} height={15} fill="#065F46" rx="3"/>
-            <text x={W-pR+30} y={py(analysis.tp2)+2} textAnchor="middle" fill="white" fontSize="9" fontWeight="700">TP2 {analysis.tp2}</text>
-          </>}
-
-          {/* Candles */}
-          {recent.map((c,i)=>{
-            const x=px(i),bull=c.c>=c.o;
-            const col=bull?BULL:BEAR;
-            const bodyH=Math.max(Math.abs(py(c.o)-py(c.c)),1.5);
-            return(<g key={i}>
-              <line x1={x} y1={py(c.h)} x2={x} y2={py(c.l)} stroke={col} strokeWidth="1.2" opacity="0.9"/>
-              <rect x={x-cw/2} y={Math.min(py(c.o),py(c.c))} width={Math.max(cw-0.5,2)} height={bodyH} fill={col} opacity="0.95"/>
-            </g>);})}
-
-          {/* Timestamps — readable, every candle, rotated 45° */}
-          {recent.map((c,i)=>{
-            const x=px(i),d=new Date(c.t+IST);
-            const hm=`${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-            const dm=`${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}`;
-            const prev=i>0?new Date(recent[i-1].t+IST):null;
-            const dayChange=!prev||prev.getUTCDate()!==d.getUTCDate();
-            // Show label every 5 candles to avoid crowding, always on day change
-            const showLabel = dayChange || i%5===0;
-            if(!showLabel)return(<line key={`t${i}`} x1={x} y1={pT+cH} x2={x} y2={pT+cH+3} stroke="#21262D" strokeWidth="1"/>);
-            return(<g key={`t${i}`} transform={`translate(${x},${pT+cH+4})`}>
-              <line x1={0} y1={0} x2={0} y2={4} stroke="#30363D" strokeWidth="1"/>
-              <text transform="rotate(-40)" x={-2} y={3} textAnchor="end" fill={dayChange?"#C9D1D9":"#6E7681"} fontSize={dayChange?"10":"9"} fontFamily="'Roboto Mono',monospace" fontWeight={dayChange?"700":"400"}>
-                {dayChange?`${dm} ${hm}`:hm}
-              </text>
-            </g>);})}
-
-          {/* Axes */}
-          <line x1={pL} y1={pT+cH} x2={W-pR} y2={pT+cH} stroke="#21262D" strokeWidth="1.5"/>
-          <line x1={pL} y1={pT} x2={pL} y2={pT+cH} stroke="#21262D" strokeWidth="1.5"/>
-
-          {/* Legend */}
-          {[{c:"#F59E0B",l:"MA20"},{c:"#6366F1",l:"MA50"},{c:"#26A69A",l:"FVG↑"},{c:"#3B82F6",l:"OB↑"},{c:"#EF5350",l:"BSL"},{c:"#26A69A",l:"SSL"},{c:"#7C3AED",l:"Asian"}].map((item,i)=>(
-            <g key={i} transform={`translate(${pL+i*70},${pT+cH+38})`}>
-              <rect x={0} y={-7} width={8} height={8} fill={item.c} rx="1.5" opacity="0.85"/>
-              <text x={12} y={0} fill="#484F58" fontSize="9">{item.l}</text>
-            </g>))}
-        </svg>
+      {/* Chart container */}
+      <div ref={containerRef} style={{width:"100%",height:`${effH}px`}}>
+        {!chartReady&&<div style={{height:`${effH}px`,display:"flex",alignItems:"center",justifyContent:"center",color:"#8B949E",flexDirection:"column",gap:"8px"}}><div style={{fontSize:"28px"}}>📊</div><div>Loading chart...</div></div>}
+        {chartReady&&!data?.length&&<div style={{height:`${effH}px`,display:"flex",alignItems:"center",justifyContent:"center",color:"#8B949E",flexDirection:"column",gap:"8px"}}><div style={{fontSize:"28px"}}>⏳</div><div>Loading {tfLabel}...</div></div>}
       </div>
 
-      {/* Resize handle */}
-      {!fullscreen&&(
-        <div onMouseDown={e=>{isDrag.current=true;dragY.current=e.clientY;dragH0.current=chartH;}}
-          style={{height:"5px",background:"#161B22",cursor:"ns-resize",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none"}}>
-          <div style={{width:"36px",height:"2px",background:"#30363D",borderRadius:"1px"}}/>
-        </div>)}
-    </div>);}
-
+      {/* Legend */}
+      <div style={{padding:"4px 10px",background:"#161B22",borderTop:"1px solid #21262D",display:"flex",gap:"14px",flexWrap:"wrap"}}>
+        {[{c:"#F59E0B",l:"MA20"},{c:"#6366F1",l:"MA50"},{c:"#26A69A",l:"FVG/SSL"},{c:"#3B82F6",l:"OB/Entry"},{c:"#EF5350",l:"BSL/SL"},{c:"#7C3AED",l:"Asian"},{c:"#A78BFA",l:"OTE Fib"}].map((x,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:"4px"}}>
+            <div style={{width:"10px",height:"3px",background:x.c,borderRadius:"2px"}}/>
+            <span style={{color:"#484F58",fontSize:"9px"}}>{x.l}</span>
+          </div>))}
+        {analysis&&<span style={{marginLeft:"auto",color:"#484F58",fontSize:"10px"}}>Yahoo Finance · ~15m delay · {tfLabel}</span>}
+      </div>
+    </div>);
+}
 
 const ICT_STRATEGIES=[
   {id:"silver_bullet",name:"Silver Bullet",icon:"🥈",desc:"FVG CE entry during Silver Bullet window. Mark BSL/SSL → sweep → MSS on 1m → FVG CE entry.",color:"#7C3AED",thresholds:{slMult:0.8,tp1Mult:1.2,tp2Mult:2.0},rules:["bullFVG","bearFVG","chochBull","chochBear","liqSweepSSL","liqSweepBSL"],minConf:55},
@@ -819,7 +792,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
         </div>
 
         {/* CHART */}
-        <Chart data={candleData[sym]?.[chartTF]||candleData[sym]?.[selTFs.execution]} analysis={analysis} tfLabel={`${sym} · ${chartTF}`} chartTF={chartTF} onTFChange={handleChartTFChange} allTFs={["1m","5m","15m","30m","1H","4H","1D"]} fullscreen={fullscreen} onToggleFS={()=>setFullscreen(!fullscreen)}/>
+        <Chart data={candleData[sym]?.[chartTF]||candleData[sym]?.[selTFs.execution]} analysis={analysis} tfLabel={`${sym} · ${chartTF}`} chartTF={chartTF} onTFChange={handleChartTFChange} allTFs={["1m","5m","15m","30m","1H","4H","1D"]} fullscreen={fullscreen} onToggleFS={()=>setFullscreen(!fullscreen)} sym={sym} onRefresh={handleRefresh}/>
 
         {/* TABS */}
         <div style={{background:"white",borderRadius:"10px",padding:"4px",border:"1px solid #E2E8F0",display:"flex",gap:"2px",flexWrap:"wrap"}}>
