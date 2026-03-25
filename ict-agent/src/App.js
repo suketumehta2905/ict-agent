@@ -49,30 +49,74 @@ function genCandles(base,mins,count=300,vol=0.0018){const sv=vol*Math.sqrt(mins/
 // SWING HIGHS/LOWS — joshyattridge exact algorithm
 // "A swing high is when current high is highest of swing_length candles BEFORE AND AFTER"
 // swing_length=5 means checking 5 candles each side = 11-candle window
-function detectSwingPoints(candles,swingLen=5){const swings=[];for(let i=swingLen;i<candles.length-swingLen;i++){const c=candles[i];const wH=candles.slice(i-swingLen,i+swingLen+1).map(x=>x.h);if(c.h===Math.max(...wH))swings.push({type:"high",price:c.h,idx:i});const wL=candles.slice(i-swingLen,i+swingLen+1).map(x=>x.l);if(c.l===Math.min(...wL))swings.push({type:"low",price:c.l,idx:i});}return swings;}
+function detectSwingPoints(candles,swingLen=10){
+  // Increased swing window to 10 — only significant swing highs/lows
+  // This prevents every minor wiggle from becoming a swing point
+  const swings=[];
+  for(let i=swingLen;i<candles.length-swingLen;i++){
+    const c=candles[i];
+    const wH=candles.slice(i-swingLen,i+swingLen+1).map(x=>x.h);
+    const wL=candles.slice(i-swingLen,i+swingLen+1).map(x=>x.l);
+    // Must be STRICTLY highest/lowest (no ties)
+    if(c.h===Math.max(...wH)&&wH.filter(v=>v===c.h).length===1)
+      swings.push({type:"high",price:c.h,idx:i});
+    if(c.l===Math.min(...wL)&&wL.filter(v=>v===c.l).length===1)
+      swings.push({type:"low",price:c.l,idx:i});
+  }
+  return swings;
+}
 
 // BOS / CHoCH — trend-aware classification (joshyattridge smc.py)
 // BOS = break IN trend direction (continuation)
 // CHoCH = break AGAINST trend (reversal signal — most important for entries)
 // USE CLOSE PRICE for body break to filter false wick breaks
 function detectBOSCHoCH(candles,swings){
-  const results=[];if(swings.length<2)return results;
+  // KEY FIX: Track WHICH swing levels have already been broken
+  // so we never fire the same BOS/CHoCH twice
+  const results=[];
+  if(swings.length<4)return results;
   let trend="NEUTRAL";
   const highs=swings.filter(s=>s.type==="high").sort((a,b)=>a.idx-b.idx);
   const lows=swings.filter(s=>s.type==="low").sort((a,b)=>a.idx-b.idx);
-  for(let i=50;i<candles.length;i++){
+  const brokenHighs=new Set(); // track broken swing levels by idx
+  const brokenLows=new Set();
+  let lastHighIdx=-1; // track which high we're watching
+  let lastLowIdx=-1;
+
+  for(let i=10;i<candles.length;i++){
     const c=candles[i];
-    const lastHigh=highs.filter(s=>s.idx<i-1).slice(-1)[0];
-    const lastLow=lows.filter(s=>s.idx<i-1).slice(-1)[0];
-    if(lastHigh&&c.c>lastHigh.price){// close-based break for clean signal
-      const type=trend==="BEARISH"?"CHoCH":"BOS";
-      results.push({type,dir:"bullish",price:lastHigh.price,idx:i,level:lastHigh.price});
-      trend="BULLISH";}
-    if(lastLow&&c.c<lastLow.price){
-      const type=trend==="BULLISH"?"CHoCH":"BOS";
-      results.push({type,dir:"bearish",price:lastLow.price,idx:i,level:lastLow.price});
-      trend="BEARISH";}}
-  return results.slice(-10);}
+    // Find the most recent UNBROKEN swing high/low BEFORE current candle
+    const relevantHighs=highs.filter(s=>s.idx<i-2&&!brokenHighs.has(s.idx));
+    const relevantLows=lows.filter(s=>s.idx<i-2&&!brokenLows.has(s.idx));
+    const watchHigh=relevantHighs[relevantHighs.length-1];
+    const watchLow=relevantLows[relevantLows.length-1];
+
+    // ATR for meaningful break threshold
+    const recentATR=candles.slice(Math.max(0,i-14),i).reduce((s,x)=>s+(x.h-x.l),0)/14||1;
+    // Only fire if this is a NEW level being broken (not one we already processed)
+    if(watchHigh&&watchHigh.idx!==lastHighIdx&&c.c>watchHigh.price){
+      // Require ATR-based break: close must exceed by at least 0.3× ATR (filters noise wicks)
+      if(c.c-watchHigh.price>recentATR*0.3){
+        const type=trend==="BEARISH"?"CHoCH":"BOS";
+        results.push({type,dir:"bullish",price:watchHigh.price,idx:i,level:watchHigh.price});
+        brokenHighs.add(watchHigh.idx);
+        lastHighIdx=watchHigh.idx;
+        trend="BULLISH";
+      }
+    }
+    if(watchLow&&watchLow.idx!==lastLowIdx&&c.c<watchLow.price){
+      if(watchLow.price-c.c>recentATR*0.3){
+        const type=trend==="BULLISH"?"CHoCH":"BOS";
+        results.push({type,dir:"bearish",price:watchLow.price,idx:i,level:watchLow.price});
+        brokenLows.add(watchLow.idx);
+        lastLowIdx=watchLow.idx;
+        trend="BEARISH";
+      }
+    }
+  }
+  // Return only last 3 — clean chart, not flooded
+  return results.slice(-3);
+}
 
 // FVG — joshyattridge exact definition + CE levels
 // "Bullish FVG: prev.high < next.low (gap above prev candle)"
@@ -215,7 +259,21 @@ function analyze(candles,weights,thresh,times){
   if(amd.phase==="DISTRIBUTION"){if(amd.dir==="BULLISH")fire("amd","bull");else if(amd.dir==="BEARISH")fire("amd","bear");}
 
   const total=bull+bear||1,dir=bull>=bear?"LONG":"SHORT";
-  const conf=Math.min(96,Math.max(38,Math.round(Math.max(bull,bear)/total*100)));
+  const rawConf=Math.round(Math.max(bull,bear)/total*100);
+  
+  // ── ICT QUALITY GATE — real setups need real confluences ──
+  // A valid ICT signal requires at minimum:
+  // 1. Liquidity sweep (SSL or BSL taken) — institutions hunt stops first
+  // 2. Structure shift (CHoCH or BOS) — confirms institutional direction  
+  // 3. At least one entry model (OB or FVG) — precise entry zone
+  const bullRules=fr.bull;const bearRules=fr.bear;
+  const activeRules=dir==="LONG"?bullRules:bearRules;
+  const hasLiqSweep=activeRules.some(r=>r.includes("liqSweep"));
+  const hasStructure=activeRules.some(r=>r.includes("bos")||r.includes("choch"));
+  const hasEntryModel=activeRules.some(r=>r.includes("OB")||r.includes("FVG")||r.includes("ote"));
+  // Penalise heavily if missing core ICT elements
+  const qualityMultiplier=hasLiqSweep&&hasStructure&&hasEntryModel?1.0:hasLiqSweep&&hasStructure?0.75:hasStructure?0.55:0.35;
+  const conf=Math.min(94,Math.max(28,Math.round(rawConf*qualityMultiplier)));
   
   // ── Entry/SL/TP calculation ──────────────────────────────────
   // If OB found, use OB CE as entry (higher precision per ICT)
@@ -251,7 +309,59 @@ function analyze(candles,weights,thresh,times){
     judas:"Judas swing at session open — false move to sweep liquidity before true direction",
     amd:`AMD ${amd.phase}: ${amd.desc}`};
   const reasons=fr[dir==="LONG"?"bull":"bear"].map(k=>({key:k,label:RL[k],desc:DESCS[k]||""}));
-  return{dir,conf,reasons,firedRules:fr,entry:rawEntry,sl,tp1,tp2,tp3,rr,atr:+atr.toFixed(3),slPips,tp1Pips,obs,fvgs,structs,liq,pd,htf,asian,mb,amd,judas,candle:last,entryOB,entryFVG,swings:swings.slice(-20)};}
+
+  // ── ICT SETUP RATING — proper sniper entry logic ─────────────
+  // ICT says: NEVER enter just because confluences exist.
+  // You need: HTF bias → Killzone → Liquidity swept → CHoCH → OB/FVG entry
+  // Setup stages: WATCHING → ALERT → READY → SNIPER
+  let setupStage="WATCHING";
+  let setupDetails=[];
+  let entryValid=false;
+
+  // Stage 1: HTF bias confirmed?
+  const htfOk=htf.bias!=="NEUTRAL";
+  if(htfOk)setupDetails.push("✅ HTF bias: "+htf.bias);
+  else setupDetails.push("⏳ Waiting: No clear HTF trend");
+
+  // Stage 2: In correct zone (premium/discount)?
+  const zoneOk=(dir==="LONG"&&pd.zone==="DISCOUNT")||(dir==="SHORT"&&pd.zone==="PREMIUM");
+  if(zoneOk)setupDetails.push("✅ Price in "+pd.zone+" zone ("+pd.pct+"%)");
+  else setupDetails.push("⏳ Price in wrong zone: "+pd.zone+" — wait for retracement");
+
+  // Stage 3: Liquidity swept?
+  const liqSwept=dir==="LONG"?liq.sweepSSL:liq.sweepBSL;
+  if(liqSwept)setupDetails.push("✅ Liquidity swept — smart money entry active");
+  else setupDetails.push("⏳ No liquidity sweep yet — BSL:"+liq.BSL+" SSL:"+liq.SSL);
+
+  // Stage 4: CHoCH (Change of Character) — THE KEY ICT SIGNAL
+  const hasCHoCH=[...bosChoch].reverse().find(s=>s.type==="CHoCH"&&
+    ((dir==="LONG"&&s.dir==="bullish")||(dir==="SHORT"&&s.dir==="bearish")));
+  if(hasCHoCH)setupDetails.push("✅ CHoCH confirmed at "+hasCHoCH.price?.toFixed(3)+" — reversal signal");
+  else setupDetails.push("⏳ No CHoCH yet — BOS only shows trend, CHoCH needed for entry");
+
+  // Stage 5: OB or FVG at entry?
+  const hasOBEntry=entryOB&&Math.abs(last.c-entryOB.ce)/last.c<0.003;
+  const hasFVGEntry=entryFVG&&last.c>=entryFVG.bot&&last.c<=entryFVG.top;
+  if(hasOBEntry)setupDetails.push("✅ Price at OB "+entryOB.quality+" ["+entryOB.ce?.toFixed(3)+"] — precision entry");
+  else if(hasFVGEntry)setupDetails.push("✅ Price inside FVG CE ["+entryFVG.ce?.toFixed(3)+"] — FVG entry");
+  else setupDetails.push("⏳ Wait: Price not at OB or FVG — patience for CE retest");
+
+  // Determine setup stage
+  const stageScore=[htfOk,zoneOk,liqSwept,!!hasCHoCH,hasOBEntry||hasFVGEntry].filter(Boolean).length;
+  if(stageScore>=5){setupStage="SNIPER";entryValid=true;}
+  else if(stageScore>=4){setupStage="READY";}
+  else if(stageScore>=2){setupStage="ALERT";}
+  else{setupStage="WATCHING";}
+
+  // Entry quality gate — only mark as valid entry when truly ready
+  const entryQuality=stageScore>=4?"A+":stageScore>=3?"A":stageScore>=2?"B":"WAIT";
+
+  return{dir,conf,reasons,firedRules:fr,
+    entry:rawEntry,sl,tp1,tp2,tp3,rr,atr:+atr.toFixed(3),slPips,tp1Pips,
+    obs,fvgs,structs,liq,pd,htf,asian,mb,amd,judas,candle:last,entryOB,entryFVG,
+    swings:swings.slice(-20),
+    // ICT setup info
+    setupStage,setupDetails,entryValid,entryQuality,stageScore};}
 
 function learnFromBT(prev,trades,winRate,total,sym){
   const brain=JSON.parse(JSON.stringify(prev));const log=[];
@@ -473,7 +583,7 @@ function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onTog
     }catch(e){}
   },[data]);
 
-  // ── OVERLAY ICT LEVELS ──────────────────────────────────────
+  // ── OVERLAY ICT LEVELS — clean, no duplicates ───────────────
   useEffect(()=>{
     if(!chartRef.current||!seriesRef.current||!data?.length)return;
     const chart=chartRef.current;
@@ -481,14 +591,19 @@ function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onTog
     if(!LC)return;
 
     // Clear old lines
-    linesRef.current.forEach(l=>{try{chart.removePriceLine(l);}catch(e){}});
+    linesRef.current.forEach(l=>{try{seriesRef.current.removePriceLine(l);}catch(e){}});
     linesRef.current=[];
 
-    const addLine=(price,color,title,dash=true)=>{
+    const usedPrices=new Set();// prevent duplicate labels at same price
+    const addLine=(price,color,title,dash=true,width=1)=>{
       if(!price||price<=0)return;
+      // Deduplicate — skip if a label already exists within 0.05% of this price
+      const key=Math.round(price*20)/20;// round to nearest 0.05
+      if(usedPrices.has(key))return;
+      usedPrices.add(key);
       try{
         const l=seriesRef.current.createPriceLine({
-          price,color,lineWidth:1,
+          price,color,lineWidth:width,
           lineStyle:dash?LC.LineStyle.Dashed:LC.LineStyle.Solid,
           axisLabelVisible:true,title
         });
@@ -496,68 +611,87 @@ function Chart({data,analysis,tfLabel,chartTF,onTFChange,allTFs,fullscreen,onTog
       }catch(e){}
     };
 
-    // Signal levels
+    // ── Signal levels (always shown when analysis exists) ────
     if(analysis){
-      addLine(analysis.entry,'#3B82F6','ENTRY',false);
-      addLine(analysis.sl,'#EF5350','SL',false);
-      addLine(analysis.tp1,'#26A69A','TP1',false);
-      addLine(analysis.tp2,'#059669','TP2',true);
+      addLine(analysis.entry,'#3B82F6','● ENTRY',false,2);
+      addLine(analysis.sl,'#EF5350','✕ SL',false,2);
+      addLine(analysis.tp1,'#26A69A','✓ TP1',false,2);
+      if(analysis.tp2&&Math.abs(analysis.tp2-analysis.tp1)>0.01)
+        addLine(analysis.tp2,'#059669','✓ TP2',true,1);
     }
-    // Liquidity
+
+    // ── Liquidity (BSL/SSL) ──────────────────────────────────
     if(showLiq&&analysis?.liq){
-      addLine(analysis.liq.BSL,'#EF535088','BSL');
-      addLine(analysis.liq.SSL,'#26A69A88','SSL');
+      addLine(analysis.liq.BSL,'#EF5350','BSL',true,1);
+      addLine(analysis.liq.SSL,'#26A69A','SSL',true,1);
     }
-    // Asian range
+
+    // ── Asian range ──────────────────────────────────────────
     if(showAsian&&analysis?.asian?.hi>0){
-      addLine(analysis.asian.hi,'#7C3AED88','Asia Hi');
-      addLine(analysis.asian.lo,'#7C3AED88','Asia Lo');
+      addLine(analysis.asian.hi,'#7C3AED','Asia Hi',true,1);
+      addLine(analysis.asian.lo,'#7C3AED','Asia Lo',true,1);
     }
-    // Equilibrium
-    if(analysis?.pd?.eq>0){
-      addLine(analysis.pd.eq,'#47556944','EQ');
-    }
-    // MA lines
+
+    // ── MA lines ─────────────────────────────────────────────
     if(showMA&&analysis?.htf){
-      if(analysis.htf.ma20>0)addLine(analysis.htf.ma20,'#F59E0B88','MA20');
-      if(analysis.htf.ma50>0)addLine(analysis.htf.ma50,'#6366F188','MA50');
+      if(analysis.htf.ma20>0)addLine(analysis.htf.ma20,'#F59E0B','MA20',false,1);
+      if(analysis.htf.ma50>0)addLine(analysis.htf.ma50,'#6366F1','MA50',false,1);
     }
-    // Fibonacci
-    if(showFib&&analysis?.pd){
-      addLine(analysis.pd.fib618,'#A78BFA66','61.8%');
-      addLine(analysis.pd.fib705,'#A78BFA88','70.5% OTE');
-      addLine(analysis.pd.fib786,'#A78BFA66','78.6%');
-      addLine(analysis.pd.fib382,'#F59E0B55','38.2%');
-    }
-    // FVG mid lines
+
+    // ── FVG — only show TOP unfilled FVG CE ─────────────────
     if(showFVG&&analysis?.fvgs){
-      analysis.fvgs.filter(f=>!f.filled).slice(-4).forEach(f=>{
-        addLine(f.ce,f.type==='bullish'?'#26A69A66':'#EF535066',`FVG CE`);
+      const unfilled=analysis.fvgs.filter(f=>!f.filled);
+      // Show max 2 FVGs (nearest to price)
+      const last=data[data.length-1]?.c||0;
+      unfilled.sort((a,b)=>Math.abs(a.ce-last)-Math.abs(b.ce-last)).slice(0,2).forEach((f,i)=>{
+        addLine(f.ce,f.type==='bullish'?'#26A69A':'#EF5350',`FVG${i+1} CE`,true,1);
       });
     }
-    // OB mid lines
+
+    // ── OB — only show nearest OB 50% ───────────────────────
     if(showOB&&analysis?.obs){
-      analysis.obs.slice(-4).forEach(ob=>{
-        addLine(ob.ce,ob.type==='bullish'?'#3B82F666':'#EF535066',`OB 50%`);
+      const last=data[data.length-1]?.c||0;
+      const sorted=[...analysis.obs].sort((a,b)=>Math.abs(a.ce-last)-Math.abs(b.ce-last));
+      sorted.slice(0,2).forEach((ob,i)=>{
+        addLine(ob.ce,ob.type==='bullish'?'#3B82F6':'#EF5350',`OB${i+1} 50%`,true,1);
       });
     }
+
+    // ── Fibonacci OTE zone (only if enabled) ─────────────────
+    if(showFib&&analysis?.pd){
+      addLine(analysis.pd.fib618,'#A78BFA','61.8%',true,1);
+      addLine(analysis.pd.fib705,'#A78BFA','OTE 70.5%',true,1);
+      addLine(analysis.pd.fib786,'#A78BFA','78.6%',true,1);
+    }
+
   },[analysis,showFVG,showOB,showLiq,showStr,showMA,showAsian,showFib,data]);
 
-  // ── MARKERS (BOS/CHoCH) ─────────────────────────────────────
+  // ── MARKERS (BOS/CHoCH) — max 3, only significant ──────────
   useEffect(()=>{
-    if(!seriesRef.current||!analysis?.structs?.length||!showStr)return;
+    if(!seriesRef.current)return;
     try{
+      if(!showStr||!analysis?.structs?.length){
+        seriesRef.current.setMarkers([]);return;
+      }
       const sorted=[...data||[]].sort((a,b)=>a.t-b.t);
-      const markers=analysis.structs.slice(-8).map(s=>{
-        const c=sorted[s.idx]||sorted[sorted.length-1];
+      // Only show last 3 structures max, deduplicated by time proximity
+      const structs=analysis.structs.slice(-3);
+      const seen=new Set();
+      const markers=structs.map(s=>{
+        const ci=Math.min(s.idx,sorted.length-1);
+        const c=sorted[ci]||sorted[sorted.length-1];
+        const t=Math.floor(c.t/1000);
+        const tKey=Math.floor(t/300)*300;// group within 5min window
+        if(seen.has(tKey))return null;
+        seen.add(tKey);
         return{
-          time:Math.floor(c.t/1000),
+          time:t,
           position:s.dir==='bullish'?'belowBar':'aboveBar',
-          color:s.type==='BOS'?'#3B82F6':'#F59E0B',
+          color:s.type==='CHoCH'?'#F59E0B':s.dir==='bullish'?'#26A69A':'#EF5350',
           shape:s.dir==='bullish'?'arrowUp':'arrowDown',
           text:s.type,size:1
         };
-      }).filter(m=>m.time>0);
+      }).filter(Boolean).filter(m=>m.time>0);
       if(markers.length)seriesRef.current.setMarkers(markers.sort((a,b)=>a.time-b.time));
     }catch(e){}
   },[analysis,showStr,data]);
@@ -646,6 +780,7 @@ export default function App(){
   const[newTrade,setNewTrade]=useState({date:"",sym:"XAUUSD",dir:"LONG",entry:"",sl:"",tp1:"",tp2:"",result:"",pnl:"",notes:""});
   const[showAddTrade,setShowAddTrade]=useState(false);
   const[autobt,setAutobt]=useState(false);const autoRef=useRef(null);
+  const[darkMode,setDarkMode]=useState(()=>ls.get('ict_darkmode')!==false);
   // ── TRADE SIMULATOR STATE ─────────────────────────────────
   const[simTrades,setSimTrades]=useState(()=>ls.get('ict_v12_simtrades')||[]);
   const[activeSim,setActiveSim]=useState(null); // currently tracking trade
@@ -704,7 +839,9 @@ export default function App(){
     const strat=stratId?ICT_STRATEGIES.find(s=>s.id===stratId):null;
     const thresh=strat?{...brain.thresholds,...strat.thresholds}:brain.thresholds;
     const a=analyze(cd,brain.weights,thresh,times);
-    if(a){
+    // Only accept signals with enough confluence — ICT is a sniper, not a spray
+    const minConf=strat?strat.minConf:brain.thresholds.minConf;
+    if(a&&a.conf>=minConf){
       setAnalysis(a);setTab("signal");
       // Save signal
       const sig={id:Date.now(),sym,tf:chartTF,dir:a.dir,conf:a.conf,entry:a.entry,sl:a.sl,tp1:a.tp1,tp2:a.tp2,rr:a.rr,slPips:a.slPips,tp1Pips:a.tp1Pips,reasons:a.reasons.map(r=>r.label),strategy:stratId||"custom",timestamp:istStr(nowIST()),amd:a.amd?.phase,kz:activeKZ?.name||"None"};
@@ -719,10 +856,10 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
   const badge=st=>{if(st==="live")return{bg:"#DCFCE7",c:"#16A34A",t:"● LIVE"};if(st==="loading")return{bg:"#FEF9C3",c:"#D97706",t:"⟳"};if(st==="error")return{bg:"#FEE2E2",c:"#DC2626",t:"⚠"};return{bg:"#F1F5F9",c:"#64748B",t:"◌ SIM"};};
   const TABS=["signal","strategies","sessions","position","weights","backtest","tradelog","simulator","learning"];
   return(
-    <div style={{background:"#F8FAFC",minHeight:"100vh",fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",color:"#1E293B"}}>
+    <div style={{background:darkMode?"#0D1117":"#F8FAFC",minHeight:"100vh",fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",color:darkMode?"#E6EDF3":"#1E293B",transition:"background 0.2s,color 0.2s"}}>
       {showSettings&&<SettingsModal onClose={()=>setShowSettings(false)} onSave={(td,fh,ai)=>{setTdKey(td);setFhKey(fh);setAiKey(ai);}} times={times}/>}
       {/* TOP BAR */}
-      <div style={{background:"white",borderBottom:"1px solid #E2E8F0",padding:"0 16px",display:"flex",alignItems:"stretch",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",position:"sticky",top:0,zIndex:100,flexWrap:"wrap"}}>
+      <div style={{background:darkMode?"#161B22":"white",borderBottom:`1px solid ${darkMode?"#21262D":"#E2E8F0"}`,padding:"0 16px",display:"flex",alignItems:"stretch",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",position:"sticky",top:0,zIndex:100,flexWrap:"wrap"}}>
         {/* Logo */}
         <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"8px 14px 8px 0",borderRight:"1px solid #F1F5F9",marginRight:"10px"}}>
           <div style={{width:"34px",height:"34px",background:"linear-gradient(135deg,#1D4ED8,#7C3AED)",borderRadius:"9px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px"}}>🥇</div>
@@ -757,15 +894,16 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
           </div>
           <button onClick={handleRefresh} disabled={refreshing||!!loadMsg} title="Refresh all prices" style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",color:"#1D4ED8",borderRadius:"8px",padding:"6px 12px",fontSize:"12px",fontWeight:"700",cursor:"pointer",whiteSpace:"nowrap"}}>{refreshing?"⟳":"↺"} Refresh</button>
           <button onClick={()=>setShowSettings(true)} title="API Keys & Settings" style={{background:(tdKey||fhKey)?"#F0FDF4":"#FFFBEB",border:`1.5px solid ${(tdKey||fhKey)?"#BBF7D0":"#FDE047"}`,color:(tdKey||fhKey)?"#16A34A":"#92400E",borderRadius:"8px",padding:"6px 12px",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>⚙️ {liveCount>0?`${liveCount}/4 Live`:"Add Keys"}</button>
-          <div style={{fontSize:"11px",color:"#64748B",padding:"0 4px"}}>{userEmail}</div>
+          <button onClick={()=>{const d=!darkMode;setDarkMode(d);ls.set("ict_darkmode",d);}} title={darkMode?"Light Mode":"Dark Mode"} style={{background:darkMode?"#1C2128":"#F1F5F9",border:`1.5px solid ${darkMode?"#30363D":"#E2E8F0"}`,color:darkMode?"#F0B429":"#475569",borderRadius:"8px",padding:"6px 10px",fontSize:"14px",cursor:"pointer",lineHeight:"1"}}>{darkMode?"☀️":"🌙"}</button>
+          <div style={{fontSize:"11px",color:darkMode?"#8B949E":"#64748B",padding:"0 4px"}}>{userEmail}</div>
         </div>
       </div>
 
       {/* BODY — scrollable */}
-      <div style={{padding:"14px 16px",display:"flex",flexDirection:"column",gap:"12px",maxWidth:"1800px",margin:"0 auto"}}>
+      <div style={{padding:"14px 16px",display:"flex",flexDirection:"column",gap:"12px",maxWidth:"1800px",margin:"0 auto",minHeight:"calc(100vh - 60px)"}}>
 
         {/* Symbol header + analyze buttons */}
-        <div style={{background:"white",borderRadius:"12px",padding:"14px 18px",border:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"10px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
+        <div style={{background:darkMode?"#161B22":"white",borderRadius:"12px",padding:"14px 18px",border:`1px solid ${darkMode?"#30363D":"#E2E8F0"}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"10px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
           <div style={{display:"flex",alignItems:"center",gap:"14px",flexWrap:"wrap"}}>
             <div style={{background:S.bg,border:`2px solid ${S.border}`,borderRadius:"10px",padding:"10px 16px",minWidth:"120px"}}>
               <div style={{fontWeight:"700",fontSize:"11px",color:S.color,letterSpacing:"1px"}}>{sym} · {S.label}</div>
@@ -795,15 +933,58 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
         <Chart data={candleData[sym]?.[chartTF]||candleData[sym]?.[selTFs.execution]} analysis={analysis} tfLabel={`${sym} · ${chartTF}`} chartTF={chartTF} onTFChange={handleChartTFChange} allTFs={["1m","5m","15m","30m","1H","4H","1D"]} fullscreen={fullscreen} onToggleFS={()=>setFullscreen(!fullscreen)} sym={sym} onRefresh={handleRefresh}/>
 
         {/* TABS */}
-        <div style={{background:"white",borderRadius:"10px",padding:"4px",border:"1px solid #E2E8F0",display:"flex",gap:"2px",flexWrap:"wrap"}}>
+        <div style={{background:darkMode?"#161B22":"white",borderRadius:"10px",padding:"4px",border:`1px solid ${darkMode?"#30363D":"#E2E8F0"}`,display:"flex",gap:"2px",flexWrap:"wrap"}}>
           {TABS.map(t=>(
-            <button key={t} onClick={()=>setTab(t)} style={{flex:1,minWidth:"80px",padding:"8px 4px",borderRadius:"7px",border:"none",background:tab===t?"#EFF6FF":"transparent",color:tab===t?"#1D4ED8":"#64748B",fontSize:"12px",fontWeight:tab===t?"700":"500",cursor:"pointer"}}>
+            <button key={t} onClick={()=>setTab(t)} style={{flex:1,minWidth:"80px",padding:"8px 4px",borderRadius:"7px",border:"none",background:tab===t?darkMode?"#1C2128":"#EFF6FF":"transparent",color:tab===t?"#3B82F6":darkMode?"#8B949E":"#64748B",fontSize:"12px",fontWeight:tab===t?"700":"500",cursor:"pointer"}}>
               {t==="signal"?"📡 Signal":t==="strategies"?"🎯 Strategies":t==="sessions"?"🕐 Sessions":t==="position"?"💰 Position":t==="weights"?"⚖️ Weights":t==="backtest"?"📊 Backtest":t==="tradelog"?"📓 Trade Log":t==="simulator"?"🎮 Simulator":"🧠 Learn"}
             </button>))}
         </div>
 
         {/* ── SIGNAL TAB ── */}
         {tab==="signal"&&analysis&&(
+          <div style={{display:"grid",gap:"10px"}}>
+          {/* SETUP STAGE BANNER — ICT sniper philosophy */}
+          {(()=>{
+            const stageColors={WATCHING:{bg:"#1E293B",border:"#334155",text:"#94A3B8",icon:"👁"},ALERT:{bg:"#FFFBEB",border:"#FDE047",text:"#92400E",icon:"⚡"},READY:{bg:"#EFF6FF",border:"#93C5FD",text:"#1D4ED8",icon:"🎯"},SNIPER:{bg:"#F0FDF4",border:"#86EFAC",text:"#16A34A",icon:"🔫"}};
+            const sc=stageColors[analysis.setupStage]||stageColors.WATCHING;
+            return(
+            <div style={{background:sc.bg,border:`2px solid ${sc.border}`,borderRadius:"12px",padding:"14px 18px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px",flexWrap:"wrap",gap:"8px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                  <span style={{fontSize:"24px"}}>{sc.icon}</span>
+                  <div>
+                    <div style={{fontWeight:"800",fontSize:"18px",color:sc.text}}>
+                      {analysis.setupStage==="SNIPER"?"SNIPER ENTRY — Take the Shot":
+                       analysis.setupStage==="READY"?"READY — Final confirmation needed":
+                       analysis.setupStage==="ALERT"?"ALERT — Setup forming, be patient":
+                       "WATCHING — No valid setup yet"}
+                    </div>
+                    <div style={{fontSize:"12px",color:"#64748B",marginTop:"2px"}}>
+                      Setup quality: <strong style={{color:analysis.entryQuality==="A+"?"#16A34A":analysis.entryQuality==="A"?"#2563EB":analysis.entryQuality==="B"?"#D97706":"#EF4444"}}>{analysis.entryQuality}</strong> · 
+                      {analysis.stageScore}/5 ICT conditions met · {analysis.dir==="LONG"?"▲ LONG":"▼ SHORT"} bias {analysis.conf}%
+                    </div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:"6px"}}>
+                  {[0,1,2,3,4].map(i=>(
+                    <div key={i} style={{width:"28px",height:"8px",borderRadius:"4px",background:i<analysis.stageScore?"#16A34A":"#E2E8F0",transition:"background 0.3s"}}/>
+                  ))}
+                </div>
+              </div>
+              {/* Setup checklist */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px"}}>
+                {analysis.setupDetails?.map((d,i)=>(
+                  <div key={i} style={{fontSize:"12px",color:d.startsWith("✅")?"#16A34A":"#94A3B8",padding:"4px 8px",background:d.startsWith("✅")?"#F0FDF4":"#F8FAFC",borderRadius:"6px",border:`1px solid ${d.startsWith("✅")?"#BBF7D0":"#F1F5F9"}`}}>
+                    {d}
+                  </div>
+                ))}
+              </div>
+              {analysis.setupStage!=="SNIPER"&&(
+                <div style={{marginTop:"10px",padding:"8px 12px",background:"rgba(0,0,0,0.05)",borderRadius:"6px",fontSize:"12px",color:"#64748B",fontStyle:"italic"}}>
+                  💡 ICT Rule: "Do not enter a trade just because confluences exist. Wait for the market to come to YOUR level — the sniper waits for the perfect shot."
+                </div>
+              )}
+            </div>);})()}
           <div style={{background:"white",borderRadius:"12px",padding:"18px",border:`2px solid ${analysis.dir==="LONG"?"#86EFAC":"#FCA5A5"}`,boxShadow:`0 2px 12px ${analysis.dir==="LONG"?"rgba(22,163,74,0.07)":"rgba(220,38,38,0.07)"}`}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",marginBottom:"14px"}}>
               {[{l:"ENTRY PRICE",v:analysis.entry,c:"#1D4ED8",bg:"#EFF6FF"},{l:"STOP LOSS",v:analysis.sl,c:"#DC2626",bg:"#FEF2F2"},{l:"TAKE PROFIT 1",v:analysis.tp1,c:"#16A34A",bg:"#F0FDF4"},{l:"TAKE PROFIT 2",v:analysis.tp2,c:"#059669",bg:"#F0FDF4"}].map(x=>(
@@ -840,7 +1021,7 @@ const res=await fetch(`${WORKER}/anthropic`,{method:"POST",headers:{"Content-Typ
               </div>
             </div>
           </div>)}
-        {tab==="signal"&&!analysis&&<div style={{background:"white",borderRadius:"12px",padding:"50px 20px",textAlign:"center",border:"1px solid #E2E8F0"}}><div style={{fontSize:"52px",marginBottom:"12px"}}>🔬</div><div style={{fontSize:"17px",fontWeight:"700",marginBottom:"8px"}}>Ready to Analyze {sym}</div><div style={{fontSize:"14px",color:"#64748B"}}>Click <strong style={{color:"#1D4ED8"}}>Analyze</strong> for full ICT Sovereign analysis with all levels on chart</div></div>}
+        {tab==="signal"&&!analysis&&<div style={{background:darkMode?"#161B22":"white",borderRadius:"12px",padding:"50px 20px",textAlign:"center",border:`1px solid ${darkMode?"#30363D":"#E2E8F0"}`}}><div style={{fontSize:"52px",marginBottom:"12px"}}>🎯</div><div style={{fontSize:"17px",fontWeight:"700",marginBottom:"8px",color:darkMode?"#E6EDF3":"#1E293B"}}>Waiting for ICT Setup — {sym}</div><div style={{fontSize:"14px",color:"#64748B",lineHeight:"1.7",maxWidth:"500px",margin:"0 auto"}}><strong style={{color:darkMode?"#58A6FF":"#1D4ED8"}}>ICT is about patience.</strong> The agent scans for:<br/>✓ Liquidity sweep (BSL/SSL taken)<br/>✓ Market structure shift (CHoCH/BOS)<br/>✓ Entry model (OB, FVG CE, OTE 62–79%)<br/><br/>If no signal shows, <em>the market is not ready.</em> That is correct behaviour.</div></div>}
 
         {/* ── STRATEGIES TAB ── */}
         {tab==="strategies"&&(
